@@ -64,10 +64,15 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 KIND_CLUSTER_LOCAL ?= k8s-werf-operator-go-test-local
 
 .PHONY: local-test
-local-test: test build docker-build setup-test-local deploy ## Run operator locally in Kind cluster and verify deployment works.
+local-test: test build docker-build setup-test-local deploy-local ## Run operator locally in Kind cluster and verify deployment works.
 	@echo "Waiting for operator deployment to be ready..."
 	$(KUBECTL) --context kind-$(KIND_CLUSTER_LOCAL) rollout status deployment/k8s-werf-operator-go-controller-manager -n k8s-werf-operator-go-system --timeout=5m
 	@echo "Operator deployment is ready. You can run: kubectl --context kind-$(KIND_CLUSTER_LOCAL) logs -f deployment/k8s-werf-operator-go-controller-manager -n k8s-werf-operator-go-system"
+
+.PHONY: deploy-local
+deploy-local: manifests kustomize ## Deploy controller to local Kind cluster (sets context explicitly).
+	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
+	$(KUSTOMIZE) build config/default | $(KUBECTL) --context kind-$(KIND_CLUSTER_LOCAL) apply -f -
 
 .PHONY: setup-test-local
 setup-test-local: ## Set up a Kind cluster for local testing if it does not exist

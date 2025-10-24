@@ -12,16 +12,10 @@
 		},
 		"ghcr.io/devcontainers/features/node:1": {},
 		"ghcr.io/mikaello/devcontainer-features/modern-shell-utils:2": {}
-	}
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
+	},
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "go version",
+	"postCreateCommand": "go install sigs.k8s.io/kubebuilder/v4@latest",
 
 	// Configure tool-specific properties.
 	// "customizations": {},

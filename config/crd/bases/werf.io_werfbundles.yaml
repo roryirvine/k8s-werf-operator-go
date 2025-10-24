@@ -51,10 +51,24 @@ spec:
             type: object
           spec:
             description: "WerfBundleSpec defines the desired state of WerfBundle.\nExample:\n\n\tapiVersion:
-              werf.io/v1alpha1\n\tkind: WerfBundle\n\tmetadata:\n\t  name: my-app\n\tspec:\n\t
-              \ registry:\n\t    url: ghcr.io/org/bundle\n\t    secretRef:\n\t      name:
-              registry-creds\n\t    pollInterval: 15m"
+              werf.io/v1alpha1\n\tkind: WerfBundle\n\tmetadata:\n\t  name: my-app\n\t
+              \ namespace: default\n\tspec:\n\t  registry:\n\t    url: ghcr.io/org/bundle\n\t
+              \   secretRef:\n\t      name: registry-creds\n\t    pollInterval: 15m\n\t
+              \ converge:\n\t    serviceAccountName: werf-converge"
             properties:
+              converge:
+                description: Converge contains configuration for deploying the bundle
+                  with werf converge.
+                properties:
+                  serviceAccountName:
+                    description: |-
+                      ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
+                      This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
+                    minLength: 1
+                    type: string
+                required:
+                - serviceAccountName
+                type: object
               registry:
                 description: Registry contains configuration for accessing the OCI
                   registry where the bundle is stored.
@@ -90,6 +104,7 @@ spec:
                 - url
                 type: object
             required:
+            - converge
             - registry
             type: object
           status:

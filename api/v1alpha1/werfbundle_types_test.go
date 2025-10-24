@@ -41,6 +41,9 @@ func TestWerfBundleCreation(t *testing.T) {
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle",
 					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
 				},
 			},
 			wantErr: false,
@@ -59,6 +62,9 @@ func TestWerfBundleCreation(t *testing.T) {
 							Name: "registry-creds",
 						},
 						PollInterval: "30m",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
 					},
 				},
 				Status: WerfBundleStatus{
@@ -110,6 +116,9 @@ func TestWerfBundleDeepCopy(t *testing.T) {
 					Name: "registry-creds",
 				},
 			},
+			Converge: ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+			},
 		},
 		Status: WerfBundleStatus{
 			Phase:          "Synced",
@@ -144,6 +153,9 @@ func TestWerfBundleList(t *testing.T) {
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle1",
 					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
 				},
 			},
 			{
@@ -154,6 +166,9 @@ func TestWerfBundleList(t *testing.T) {
 				Spec: WerfBundleSpec{
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle2",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
 					},
 				},
 			},
@@ -191,6 +206,9 @@ func TestWerfBundleValidation(t *testing.T) {
 					Registry: RegistryConfig{
 						URL: "",
 					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
 				},
 			},
 			wantErr: true,
@@ -207,6 +225,9 @@ func TestWerfBundleValidation(t *testing.T) {
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle",
 					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
 				},
 			},
 			wantErr: false,
@@ -222,6 +243,9 @@ func TestWerfBundleValidation(t *testing.T) {
 					Registry: RegistryConfig{
 						URL:          "ghcr.io/org/bundle",
 						PollInterval: "invalid",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
 					},
 				},
 			},
@@ -240,9 +264,31 @@ func TestWerfBundleValidation(t *testing.T) {
 						URL:          "ghcr.io/org/bundle",
 						PollInterval: "15m",
 					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "empty ServiceAccountName should be rejected",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "",
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "ServiceAccountName is required",
 		},
 	}
 

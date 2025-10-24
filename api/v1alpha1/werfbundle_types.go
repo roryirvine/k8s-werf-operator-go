@@ -28,16 +28,23 @@ import (
 //	kind: WerfBundle
 //	metadata:
 //	  name: my-app
+//	  namespace: default
 //	spec:
 //	  registry:
 //	    url: ghcr.io/org/bundle
 //	    secretRef:
 //	      name: registry-creds
 //	    pollInterval: 15m
+//	  converge:
+//	    serviceAccountName: werf-converge
 type WerfBundleSpec struct {
 	// Registry contains configuration for accessing the OCI registry where the bundle is stored.
 	// +kubebuilder:validation:Required
 	Registry RegistryConfig `json:"registry"`
+
+	// Converge contains configuration for deploying the bundle with werf converge.
+	// +kubebuilder:validation:Required
+	Converge ConvergeConfig `json:"converge"`
 }
 
 // RegistryConfig contains configuration for accessing an OCI registry.
@@ -58,6 +65,15 @@ type RegistryConfig struct {
 	// +kubebuilder:validation:Pattern=`^([0-9]+(ns|us|µs|ms|s|m|h))+$`
 	// +kubebuilder:default:="15m"
 	PollInterval string `json:"pollInterval,omitempty"`
+}
+
+// ConvergeConfig contains configuration for deploying the bundle with werf converge.
+type ConvergeConfig struct {
+	// ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
+	// This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ServiceAccountName string `json:"serviceAccountName"`
 }
 
 // WerfBundleStatus defines the observed state of WerfBundle.

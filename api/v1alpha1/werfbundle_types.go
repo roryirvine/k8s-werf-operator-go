@@ -48,16 +48,12 @@ type RegistryConfig struct {
 	URL string `json:"url"`
 
 	// SecretRef is an optional reference to a Secret containing registry credentials.
-	// Pointer allows us to distinguish between "not provided" (nil) and "provided but empty".
-	// The Secret should have keys for authentication. If not provided, public registries
-	// can be accessed without credentials.
 	// +kubebuilder:validation:Optional
 	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
 
-	// PollInterval is the interval at which to poll the registry for new tags.
-	// Format: 15m, 1h, etc. (Duration format). Default: 15m
-	// Note: This field is not yet enforced - reconciliation happens on all events plus
-	// periodic resync. Proper interval enforcement will be added in a future release.
+	// PollInterval is the interval at which to poll the registry for new tags (e.g., 15m, 1h).
+	// Currently not enforced; reconciliation happens on all events plus periodic resync.
+	// Proper interval enforcement will be added in a future release.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^([0-9]+(ns|us|µs|ms|s|m|h))+$`
 	// +kubebuilder:default:="15m"
@@ -74,13 +70,11 @@ type WerfBundleStatus struct {
 	// +kubebuilder:validation:Optional
 	LastAppliedTag string `json:"lastAppliedTag,omitempty"`
 
-	// LastSyncTime is the timestamp of the last successful sync.
-	// Pointer allows us to represent "not yet synced" (nil) vs "synced but time is zero" (which should not happen).
+	// LastSyncTime is the timestamp of the last successful sync (nil if not yet synced).
 	// +kubebuilder:validation:Optional
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
 
-	// LastErrorMessage contains the last error message, if any.
-	// Empty string means no error; operator clears this when sync succeeds.
+	// LastErrorMessage is the last error encountered, or empty string if no error.
 	// +kubebuilder:validation:Optional
 	LastErrorMessage string `json:"lastErrorMessage,omitempty"`
 }

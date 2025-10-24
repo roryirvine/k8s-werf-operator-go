@@ -34,6 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -44,6 +46,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(werfv1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }

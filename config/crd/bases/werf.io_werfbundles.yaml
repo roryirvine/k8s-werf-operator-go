@@ -1,0 +1,227 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: werfbundles.werf.io
+spec:
+  group: werf.io
+  names:
+    kind: WerfBundle
+    listKind: WerfBundleList
+    plural: werfbundles
+    shortNames:
+    - wb
+    - wbs
+    singular: werfbundle
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.lastAppliedTag
+      name: LastAppliedTag
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: WerfBundle is the Schema for the werfbundles API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WerfBundleSpec defines the desired state of WerfBundle.
+            properties:
+              converge:
+                description: Converge contains configuration for deploying the bundle
+                  with werf converge.
+                properties:
+                  driftDetection:
+                    description: DriftDetection configures periodic drift detection
+                      and correction.
+                    properties:
+                      enabled:
+                        description: Enabled specifies whether drift detection is
+                          enabled.
+                        type: boolean
+                      interval:
+                        default: 15m
+                        description: 'Interval is how often to check for drift. Format:
+                          15m, 1h, etc.'
+                        pattern: ^([0-9]+(ns|us|µs|ms|s|m|h))+$
+                        type: string
+                      maxRetries:
+                        description: MaxRetries is the maximum number of retry attempts
+                          for failed drift checks.
+                        format: int32
+                        maximum: 10
+                        minimum: 1
+                        type: integer
+                    required:
+                    - enabled
+                    type: object
+                  logRetentionDays:
+                    description: 'LogRetentionDays specifies how many days to retain
+                      job logs. Default: 7'
+                    format: int32
+                    maximum: 365
+                    minimum: 1
+                    type: integer
+                  resourceLimits:
+                    description: ResourceLimits specifies CPU and memory limits for
+                      the converge job.
+                    properties:
+                      cpu:
+                        description: CPU is the CPU limit (e.g., "1", "500m").
+                        type: string
+                      memory:
+                        description: Memory is the memory limit (e.g., "1Gi", "512Mi").
+                        type: string
+                    type: object
+                  serviceAccountName:
+                    description: |-
+                      ServiceAccountName is the name of the ServiceAccount to use for running werf converge.
+                      This account must exist in the target namespace and have permissions to create/update resources.
+                    minLength: 1
+                    type: string
+                  targetNamespace:
+                    description: TargetNamespace is the namespace where the bundle
+                      will be deployed.
+                    minLength: 1
+                    type: string
+                  valuesFrom:
+                    description: |-
+                      ValuesFrom is a list of sources for values to pass to werf converge.
+                      Sources are processed in order, with later values overriding earlier ones.
+                    items:
+                      description: ValuesSource specifies a source for values to pass
+                        to werf converge.
+                      properties:
+                        configMapRef:
+                          description: ConfigMapRef is a reference to a ConfigMap
+                            containing values.
+                          properties:
+                            name:
+                              description: Name is the name of the ConfigMap.
+                              minLength: 1
+                              type: string
+                            optional:
+                              description: Optional indicates whether the ConfigMap
+                                must exist.
+                              type: boolean
+                          required:
+                          - name
+                          type: object
+                        secretRef:
+                          description: SecretRef is a reference to a Secret containing
+                            values.
+                          properties:
+                            name:
+                              description: Name is the name of the Secret.
+                              minLength: 1
+                              type: string
+                            optional:
+                              description: Optional indicates whether the Secret must
+                                exist.
+                              type: boolean
+                          required:
+                          - name
+                          type: object
+                      type: object
+                    type: array
+                required:
+                - serviceAccountName
+                - targetNamespace
+                type: object
+              registry:
+                description: Registry contains configuration for accessing the OCI
+                  registry where the bundle is stored.
+                properties:
+                  pollInterval:
+                    default: 15m
+                    description: |-
+                      PollInterval is the interval at which to poll the registry for new tags.
+                      Format: 15m, 1h, etc. (Duration format). Default: 15m
+                    pattern: ^([0-9]+(ns|us|µs|ms|s|m|h))+$
+                    type: string
+                  secretRef:
+                    description: |-
+                      SecretRef is a reference to a Secret containing registry credentials.
+                      The Secret should have keys: username, password, or be mountable as Docker config.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  url:
+                    description: URL is the OCI registry URL (e.g., ghcr.io/org/bundle).
+                    minLength: 1
+                    type: string
+                  versionConstraint:
+                    description: |-
+                      VersionConstraint is a semver constraint for selecting tags (e.g., >=1.0.0, ~1.2.x).
+                      If unset, uses the latest tag.
+                    type: string
+                required:
+                - url
+                type: object
+            required:
+            - converge
+            - registry
+            type: object
+          status:
+            description: WerfBundleStatus defines the observed state of WerfBundle.
+            properties:
+              lastAppliedTag:
+                description: LastAppliedTag is the last successfully deployed tag.
+                type: string
+              lastErrorMessage:
+                description: LastErrorMessage contains the last error message, if
+                  any.
+                type: string
+              lastSyncTime:
+                description: LastSyncTime is the timestamp of the last successful
+                  sync.
+                format: date-time
+                type: string
+              phase:
+                description: Phase is the current phase of the bundle (Syncing, Synced,
+                  Failed).
+                enum:
+                - Syncing
+                - Synced
+                - Failed
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

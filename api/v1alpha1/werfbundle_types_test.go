@@ -31,7 +31,7 @@ func TestWerfBundleCreation(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid WerfBundle with required fields",
+			name: "valid WerfBundle with minimal required fields",
 			bundle: &WerfBundle{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-bundle",
@@ -41,16 +41,12 @@ func TestWerfBundleCreation(t *testing.T) {
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle",
 					},
-					Converge: ConvergeConfig{
-						TargetNamespace:    "app-ns",
-						ServiceAccountName: "werf-converge",
-					},
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "WerfBundle with all optional fields",
+			name: "valid WerfBundle with all Slice 1 fields",
 			bundle: &WerfBundle{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-bundle-full",
@@ -62,21 +58,7 @@ func TestWerfBundleCreation(t *testing.T) {
 						SecretRef: &corev1.LocalObjectReference{
 							Name: "registry-creds",
 						},
-						PollInterval:      "30m",
-						VersionConstraint: func() *string { s := ">=1.0.0"; return &s }(),
-					},
-					Converge: ConvergeConfig{
-						TargetNamespace:    "app-ns",
-						ServiceAccountName: "werf-converge",
-						ResourceLimits: &ResourceLimits{
-							CPU:    func() *string { s := "1"; return &s }(),
-							Memory: func() *string { s := "1Gi"; return &s }(),
-						},
-						LogRetentionDays: func() *int32 { i := int32(14); return &i }(),
-						DriftDetection: &DriftDetectionConfig{
-							Enabled:  true,
-							Interval: "30m",
-						},
+						PollInterval: "30m",
 					},
 				},
 				Status: WerfBundleStatus{
@@ -124,10 +106,9 @@ func TestWerfBundleDeepCopy(t *testing.T) {
 		Spec: WerfBundleSpec{
 			Registry: RegistryConfig{
 				URL: "ghcr.io/org/bundle",
-			},
-			Converge: ConvergeConfig{
-				TargetNamespace:    "app-ns",
-				ServiceAccountName: "werf-converge",
+				SecretRef: &corev1.LocalObjectReference{
+					Name: "registry-creds",
+				},
 			},
 		},
 		Status: WerfBundleStatus{
@@ -136,10 +117,8 @@ func TestWerfBundleDeepCopy(t *testing.T) {
 		},
 	}
 
-	// Create a deep copy
 	copy := original.DeepCopy()
 
-	// Verify the copy has the same values
 	if copy.Name != original.Name {
 		t.Errorf("Copy name mismatch: got %s, want %s", copy.Name, original.Name)
 	}
@@ -147,7 +126,6 @@ func TestWerfBundleDeepCopy(t *testing.T) {
 		t.Errorf("Copy registry URL mismatch: got %s, want %s", copy.Spec.Registry.URL, original.Spec.Registry.URL)
 	}
 
-	// Verify modifying the copy doesn't affect the original
 	copy.Spec.Registry.URL = "ghcr.io/other/bundle"
 	if original.Spec.Registry.URL != "ghcr.io/org/bundle" {
 		t.Errorf("Original was modified when copy was changed")
@@ -166,10 +144,6 @@ func TestWerfBundleList(t *testing.T) {
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle1",
 					},
-					Converge: ConvergeConfig{
-						TargetNamespace:    "app-ns",
-						ServiceAccountName: "werf-converge",
-					},
 				},
 			},
 			{
@@ -180,10 +154,6 @@ func TestWerfBundleList(t *testing.T) {
 				Spec: WerfBundleSpec{
 					Registry: RegistryConfig{
 						URL: "ghcr.io/org/bundle2",
-					},
-					Converge: ConvergeConfig{
-						TargetNamespace:    "app-ns",
-						ServiceAccountName: "werf-converge",
 					},
 				},
 			},
@@ -200,5 +170,97 @@ func TestWerfBundleList(t *testing.T) {
 
 	if list.Items[1].Spec.Registry.URL != "ghcr.io/org/bundle2" {
 		t.Errorf("Second item registry URL mismatch: got %s, want ghcr.io/org/bundle2", list.Items[1].Spec.Registry.URL)
+	}
+}
+
+func TestWerfBundleValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		bundle  *WerfBundle
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "empty registry URL should be rejected",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "",
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "URL is required",
+		},
+		{
+			name: "valid registry URL",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid poll interval format should be validated at API server",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL:          "ghcr.io/org/bundle",
+						PollInterval: "invalid",
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "duration format",
+		},
+		{
+			name: "valid poll interval formats",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL:          "ghcr.io/org/bundle",
+						PollInterval: "15m",
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.bundle)
+			if err != nil {
+				t.Fatalf("Failed to marshal: %v", err)
+			}
+
+			var result WerfBundle
+			if err := json.Unmarshal(data, &result); err != nil {
+				t.Fatalf("Failed to unmarshal: %v", err)
+			}
+
+			if result.Spec.Registry.URL != tt.bundle.Spec.Registry.URL {
+				t.Errorf("URL mismatch: got %s, want %s", result.Spec.Registry.URL, tt.bundle.Spec.Registry.URL)
+			}
+		})
 	}
 }

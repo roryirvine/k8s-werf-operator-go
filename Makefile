@@ -61,6 +61,34 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+KIND_CLUSTER_LOCAL ?= k8s-werf-operator-go-test-local
+
+.PHONY: local-test
+local-test: test build docker-build setup-test-local deploy ## Run operator locally in Kind cluster and verify deployment works.
+	@echo "Waiting for operator deployment to be ready..."
+	$(KUBECTL) --context kind-$(KIND_CLUSTER_LOCAL) rollout status deployment/k8s-werf-operator-go-controller-manager -n k8s-werf-operator-go-system --timeout=5m
+	@echo "Operator deployment is ready. You can run: kubectl --context kind-$(KIND_CLUSTER_LOCAL) logs -f deployment/k8s-werf-operator-go-controller-manager -n k8s-werf-operator-go-system"
+
+.PHONY: setup-test-local
+setup-test-local: ## Set up a Kind cluster for local testing if it does not exist
+	@command -v $(KIND) >/dev/null 2>&1 || { \
+		echo "Kind is not installed. Please install Kind manually."; \
+		exit 1; \
+	}
+	@case "$$($(KIND) get clusters)" in \
+		*"$(KIND_CLUSTER_LOCAL)"*) \
+			echo "Kind cluster '$(KIND_CLUSTER_LOCAL)' already exists. Skipping creation." ;; \
+		*) \
+			echo "Creating Kind cluster '$(KIND_CLUSTER_LOCAL)'..."; \
+			$(KIND) create cluster --name $(KIND_CLUSTER_LOCAL) ;; \
+	esac
+	@echo "Loading operator image into Kind cluster..."
+	$(KIND) load docker-image ${IMG} --name $(KIND_CLUSTER_LOCAL)
+
+.PHONY: cleanup-test-local
+cleanup-test-local: ## Tear down the Kind cluster used for local testing
+	@$(KIND) delete cluster --name $(KIND_CLUSTER_LOCAL)
+
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # CertManager is installed by default; skip with:

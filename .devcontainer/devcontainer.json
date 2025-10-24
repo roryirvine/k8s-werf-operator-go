@@ -15,7 +15,7 @@
 	},
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "go install sigs.k8s.io/kubebuilder/v4@latest",
+	"postCreateCommand": "bash -c 'go install sigs.k8s.io/kubebuilder/v4@latest && go install sigs.k8s.io/kind@latest'",
 
 	// Configure tool-specific properties.
 	// "customizations": {},

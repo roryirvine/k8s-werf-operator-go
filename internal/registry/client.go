@@ -49,7 +49,15 @@ func (c *OCIClient) ListTags(ctx context.Context, repoURL string, auth authn.Aut
 
 // GetLatestTag returns the latest tag by sorting tags lexicographically.
 // For Slice 1, we use simple lexicographic ordering.
-// Version constraint and semver logic will be added in future slices.
+//
+// WARNING: Lexicographic ordering does NOT work correctly for semantic versioning:
+//
+//	v1.2.0 < v1.10.0 (lexicographically, but > semantically)
+//	v2.0.0 < v1.99.0 (lexicographically, but > semantically)
+//
+// This is acceptable as MVP but will be replaced with proper semver constraint
+// matching in Slice 5. Use version constraints in CRD spec as workaround
+// (e.g., ">=1.0.0,<2.0.0" to avoid unwanted major version jumps).
 func (c *OCIClient) GetLatestTag(ctx context.Context, repoURL string, auth authn.Authenticator) (string, error) {
 	tags, err := c.ListTags(ctx, repoURL, auth)
 	if err != nil {
@@ -60,7 +68,6 @@ func (c *OCIClient) GetLatestTag(ctx context.Context, repoURL string, auth authn
 		return "", nil
 	}
 
-	// For MVP, return the last tag (lexicographic order).
-	// This is a simplification that works for semver-like tags.
+	// Return the last tag (lexicographic order).
 	return tags[len(tags)-1], nil
 }

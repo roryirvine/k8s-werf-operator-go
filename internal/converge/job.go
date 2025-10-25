@@ -77,6 +77,7 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 								"--log-color=false",
 								fmt.Sprintf("%s:%s", b.werf.Spec.Registry.URL, tag),
 							},
+							// Hardcoded resource limits for Slice 1. Configurable via CRD in future slices.
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    *mustParseResource("100m"),

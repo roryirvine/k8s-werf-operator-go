@@ -27,6 +27,30 @@ const (
 )
 
 // WerfBundleReconciler reconciles WerfBundle resources.
+//
+// Design notes on key patterns:
+//
+//  1. client.Client vs direct clientset:
+//     We use client.Client (high-level abstraction from controller-runtime) instead of
+//     direct Kubernetes clientset because:
+//     - Automatic caching: Multiple Get() calls for same object don't hit API server
+//     - Request batching: Efficient for bulk operations
+//     - Mock-able: Easy to test with fake clients
+//     - Consistent API: Works uniformly for all resource types
+//
+// 2. Get() vs List():
+//
+//   - Get(): Fetch single object by name/namespace. Used when we know the exact resource.
+//     Example: r.Get(ctx, jobKey, &job) - we calculated the deterministic job name
+//
+//   - List(): Fetch multiple objects with optional label/field filtering.
+//     Would use List() if we needed to find all jobs owned by a WerfBundle.
+//
+//     3. Concurrent reconciliation safety:
+//     The controller-runtime manager prevents concurrent Reconcile() calls for the same
+//     WerfBundle resource through internal locking. If two reconciliations somehow run
+//     concurrently (e.g., different components triggering events), only one proceeds
+//     at a time. This is handled transparently - we don't need to add locks.
 type WerfBundleReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
@@ -87,7 +111,10 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
 				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
 			log.Info("ServiceAccount not found", "serviceAccount", saKey)
-			r.updateStatusFailed(ctx, bundle, errMsg)
+			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+				log.Error(err, "failed to update status after SA validation")
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to get ServiceAccount")
@@ -95,10 +122,14 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Poll registry for latest tag
+	// Note: Authentication not yet implemented (Slice 2) - always uses nil for auth
 	latestTag, err := r.RegistryClient.GetLatestTag(ctx, bundle.Spec.Registry.URL, nil)
 	if err != nil {
 		log.Error(err, "failed to get latest tag from registry")
-		r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Registry error: %v", err))
+		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Registry error: %v", err)); err != nil {
+			log.Error(err, "failed to update status after registry error")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -106,7 +137,10 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if latestTag == "" {
 		log.Info("no tags found in registry")
 		if bundle.Status.Phase == "" || bundle.Status.Phase == werfv1alpha1.PhaseFailed {
-			r.updateStatusSyncing(ctx, bundle, "")
+			if err := r.updateStatusSyncing(ctx, bundle, ""); err != nil {
+				log.Error(err, "failed to update status to Syncing")
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -114,61 +148,77 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// If latest tag matches what we already deployed, we're done
 	if bundle.Status.LastAppliedTag == latestTag {
 		if bundle.Status.Phase != werfv1alpha1.PhaseSynced {
-			r.updateStatusSynced(ctx, bundle, latestTag)
+			if err := r.updateStatusSynced(ctx, bundle, latestTag); err != nil {
+				log.Error(err, "failed to update status to Synced")
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}
 
-	// New tag found - create a Job to converge
-	log.Info("new tag found, creating converge job", "tag", latestTag)
-	r.updateStatusSyncing(ctx, bundle, latestTag)
+	// New tag found - ensure Job exists and monitor it
+	log.Info("new tag found, ensuring converge job exists", "tag", latestTag)
+	if err := r.updateStatusSyncing(ctx, bundle, latestTag); err != nil {
+		log.Error(err, "failed to update status to Syncing")
+		return ctrl.Result{}, err
+	}
 
+	// Build the Job spec
 	jobBuilder := converge.NewBuilder(bundle).WithScheme(r.Scheme)
-	job, err := jobBuilder.Build(latestTag)
+	jobSpec, err := jobBuilder.Build(latestTag)
 	if err != nil {
 		log.Error(err, "failed to build Job")
 		r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to build Job: %v", err))
 		return ctrl.Result{}, nil
 	}
 
-	// Create the Job
-	if err := r.Create(ctx, job); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			log.Info("Job already exists, checking status")
-		} else {
+	// Check if Job already exists before creating
+	jobKey := types.NamespacedName{
+		Name:      jobSpec.Name,
+		Namespace: jobSpec.Namespace,
+	}
+	existingJob := &batchv1.Job{}
+	jobExists := r.Get(ctx, jobKey, existingJob) == nil
+
+	if !jobExists {
+		// Job doesn't exist, create it
+		if err := r.Create(ctx, jobSpec); err != nil {
 			log.Error(err, "failed to create Job")
 			r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to create Job: %v", err))
 			return ctrl.Result{}, nil
 		}
+		log.Info("Job created successfully", "jobName", jobSpec.Name)
+		// Job just created, give it time to start
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	// Monitor the Job for completion
-	jobKey := types.NamespacedName{
-		Name:      job.Name,
-		Namespace: job.Namespace,
-	}
-	createdJob := &batchv1.Job{}
-	if err := r.Get(ctx, jobKey, createdJob); err != nil {
-		log.Error(err, "failed to fetch created Job")
+	// Job exists, monitor it for completion
+	log.Info("Job already exists, monitoring status", "jobName", existingJob.Name)
+
+	// Check Job status
+	if existingJob.Status.Succeeded > 0 {
+		log.Info("Job succeeded, updating status to Synced", "tag", latestTag)
+		r.updateStatusSynced(ctx, bundle, latestTag)
 		return ctrl.Result{}, nil
 	}
 
-	// Check Job status
-	if createdJob.Status.Succeeded > 0 {
-		log.Info("Job succeeded, updating status to Synced", "tag", latestTag)
-		r.updateStatusSynced(ctx, bundle, latestTag)
-	} else if createdJob.Status.Failed > 0 {
-		errMsg := fmt.Sprintf("Job failed, see job logs for details")
-		log.Info("Job failed", "jobName", createdJob.Name)
-		r.updateStatusFailed(ctx, bundle, errMsg)
+	if existingJob.Status.Failed > 0 {
+		log.Info("Job failed", "jobName", existingJob.Name)
+		if err := r.updateStatusFailed(ctx, bundle, "Job failed, see job logs for details"); err != nil {
+			log.Error(err, "failed to update status after job failure")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
-	// If job is still running, status is already set to Syncing, just requeue
 
-	return ctrl.Result{}, nil
+	// Job is still running, requeue to check again
+	log.Info("Job is still running, will recheck on next sync", "jobName", existingJob.Name)
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
 // updateStatusSyncing sets status to Syncing and clears error.
-func (r *WerfBundleReconciler) updateStatusSyncing(ctx context.Context, bundle *werfv1alpha1.WerfBundle, tag string) {
+// Returns error if status update fails so caller can decide to requeue.
+func (r *WerfBundleReconciler) updateStatusSyncing(ctx context.Context, bundle *werfv1alpha1.WerfBundle, tag string) error {
 	bundle.Status.Phase = werfv1alpha1.PhaseSyncing
 	if tag != "" {
 		bundle.Status.LastAppliedTag = tag
@@ -176,32 +226,28 @@ func (r *WerfBundleReconciler) updateStatusSyncing(ctx context.Context, bundle *
 	bundle.Status.LastErrorMessage = ""
 	bundle.Status.LastSyncTime = nil
 
-	if err := r.Status().Update(ctx, bundle); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to update status to Syncing")
-	}
+	return r.Status().Update(ctx, bundle)
 }
 
 // updateStatusSynced sets status to Synced with timestamp.
-func (r *WerfBundleReconciler) updateStatusSynced(ctx context.Context, bundle *werfv1alpha1.WerfBundle, tag string) {
+// Returns error if status update fails so caller can decide to requeue.
+func (r *WerfBundleReconciler) updateStatusSynced(ctx context.Context, bundle *werfv1alpha1.WerfBundle, tag string) error {
 	bundle.Status.Phase = werfv1alpha1.PhaseSynced
 	bundle.Status.LastAppliedTag = tag
 	bundle.Status.LastErrorMessage = ""
 	now := metav1.Now()
 	bundle.Status.LastSyncTime = &now
 
-	if err := r.Status().Update(ctx, bundle); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to update status to Synced")
-	}
+	return r.Status().Update(ctx, bundle)
 }
 
 // updateStatusFailed sets status to Failed with error message.
-func (r *WerfBundleReconciler) updateStatusFailed(ctx context.Context, bundle *werfv1alpha1.WerfBundle, errMsg string) {
+// Returns error if status update fails so caller can decide to requeue.
+func (r *WerfBundleReconciler) updateStatusFailed(ctx context.Context, bundle *werfv1alpha1.WerfBundle, errMsg string) error {
 	bundle.Status.Phase = werfv1alpha1.PhaseFailed
 	bundle.Status.LastErrorMessage = errMsg
 
-	if err := r.Status().Update(ctx, bundle); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to update status to Failed")
-	}
+	return r.Status().Update(ctx, bundle)
 }
 
 // SetupWithManager sets up the controller with the Manager.

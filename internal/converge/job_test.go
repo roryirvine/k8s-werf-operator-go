@@ -35,7 +35,7 @@ func TestBuilder_Build_ValidBundle(t *testing.T) {
 		},
 	}
 
-	builder := NewBuilder(bundle).WithScheme(testScheme).WithScheme(testScheme)
+	builder := NewBuilder(bundle).WithScheme(testScheme)
 	job, err := builder.Build("v1.0.0")
 
 	if err != nil {
@@ -139,7 +139,7 @@ func TestBuilder_Build_OwnerReference(t *testing.T) {
 		},
 	}
 
-	builder := NewBuilder(bundle).WithScheme(testScheme).WithScheme(testScheme)
+	builder := NewBuilder(bundle).WithScheme(testScheme)
 	job, err := builder.Build("v1.0.0")
 
 	if err != nil {
@@ -185,7 +185,7 @@ func TestBuilder_Build_ResourceLimits(t *testing.T) {
 		},
 	}
 
-	builder := NewBuilder(bundle).WithScheme(testScheme).WithScheme(testScheme)
+	builder := NewBuilder(bundle).WithScheme(testScheme)
 	job, err := builder.Build("v1.0.0")
 
 	if err != nil {

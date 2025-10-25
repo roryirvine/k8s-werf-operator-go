@@ -21,6 +21,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Bundle phase constants
+const (
+	PhaseSyncing = "Syncing"
+	PhaseSynced  = "Synced"
+	PhaseFailed  = "Failed"
+)
+
 // WerfBundleSpec defines the desired state of WerfBundle.
 // Example:
 //

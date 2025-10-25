@@ -36,6 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
+	"github.com/werf/k8s-werf-operator-go/controllers"
+	"github.com/werf/k8s-werf-operator-go/internal/registry"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -174,6 +176,16 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+
+	// Register WerfBundle controller
+	if err = (&controllers.WerfBundleReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		RegistryClient: registry.NewOCIClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WerfBundle")
 		os.Exit(1)
 	}
 

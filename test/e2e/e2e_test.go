@@ -256,15 +256,49 @@ spec:
 			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
 
 			By("verifying that a Job was created")
+			var jobName string
 			verifyJobCreated := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
 					"-l", "app.kubernetes.io/instance=test-bundle-invalid-registry",
-					"-o", "jsonpath={.items[*].metadata.name}")
+					"-o", "jsonpath={.items[0].metadata.name}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).NotTo(BeEmpty(), "Expected at least one Job to be created")
+				g.Expect(output).NotTo(BeEmpty(), "Expected Job to be created")
+				jobName = output
 			}
 			Eventually(verifyJobCreated, 30*time.Second).Should(Succeed())
+
+			By("verifying that Job Pod started (attempted to run werf)")
+			verifyPodStarted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pods", "-n", bundleNS,
+					"-l", fmt.Sprintf("batch.kubernetes.io/job-name=%s", jobName),
+					"-o", "jsonpath={.items[0].status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(MatchRegexp("(Running|Failed|Succeeded)"), "Expected Pod to have started")
+			}
+			Eventually(verifyPodStarted, 30*time.Second).Should(Succeed())
+
+			By("verifying that Job fails due to invalid registry")
+			verifyJobFailed := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "job", jobName, "-n", bundleNS,
+					"-o", "jsonpath={.status.failed}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				// Failed count > 0 means job has failed
+				g.Expect(output).To(MatchRegexp("[1-9]"), "Expected Job to fail")
+			}
+			Eventually(verifyJobFailed, 60*time.Second).Should(Succeed())
+
+			By("verifying WerfBundle status is Failed due to registry error")
+			verifyBundleFailed := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-invalid-registry", "-n", bundleNS,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed")
+			}
+			Eventually(verifyBundleFailed, 60*time.Second).Should(Succeed())
 
 			By("cleaning up test namespace")
 			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")

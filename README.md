@@ -1,135 +1,242 @@
-# k8s-werf-operator-go
-// TODO(user): Add simple overview of use/purpose
+# Werf Operator for Kubernetes
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes operator for deploying and managing applications packaged with [Werf](https://werf.io/) using declarative bundle definitions.
 
-## Getting Started
+## Current Status
+
+**Slice 1 - Basic Bundle Deployment** (Alpha)
+
+This is early-stage software (v1alpha1 API). The operator supports basic bundle deployment with the following functionality:
+
+- Watch for `WerfBundle` custom resources in the cluster
+- Poll OCI registries for available bundle tags
+- Create Kubernetes Jobs to run `werf converge` deployments
+- Track deployment status in the WerfBundle resource
+- Proper RBAC separation (operator minimal, job permissions namespace-scoped)
+
+**What does NOT work yet:**
+- Semantic versioning (tags are sorted lexicographically, not by semver)
+- Advanced registry authentication (access tokens only, no username/password)
+- Cross-namespace deployments
+- Drift detection
+- Helm integration
+- Custom value overrides
+
+See [Slices 2-5 in PLAN.md](.notes/PLAN.md) for the full roadmap.
+
+## Quick Start
 
 ### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- Kubernetes 1.24+ cluster
+- `kubectl` configured to access your cluster
+- Access to an OCI registry with Werf bundles
 
-```sh
-make docker-build docker-push IMG=<some-registry>/k8s-werf-operator-go:tag
+### Install the Operator
+
+1. **Install CRDs:**
+   ```bash
+   make install
+   ```
+
+2. **Deploy the operator:**
+   ```bash
+   make deploy IMG=ghcr.io/werf/k8s-werf-operator-go:v0.0.1
+   ```
+
+   Note: Replace the image with your own build or use the pre-built image if available.
+
+3. **Verify deployment:**
+   ```bash
+   kubectl get pods -n k8s-werf-operator-go-system
+   kubectl get crds | grep werfbundle
+   ```
+
+### Create a WerfBundle
+
+1. **Set up target namespace with ServiceAccount:**
+
+   In the namespace where you want werf to deploy applications, create a ServiceAccount with appropriate permissions:
+
+   ```bash
+   kubectl create namespace production
+
+   kubectl apply -f - <<EOF
+   apiVersion: v1
+   kind: ServiceAccount
+   metadata:
+     name: werf-converge
+     namespace: production
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: Role
+   metadata:
+     name: werf-converge
+     namespace: production
+   rules:
+   - apiGroups: ["*"]
+     resources: ["*"]
+     verbs: ["*"]
+   ---
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: RoleBinding
+   metadata:
+     name: werf-converge
+     namespace: production
+   roleRef:
+     apiGroup: rbac.authorization.k8s.io
+     kind: Role
+     name: werf-converge
+   subjects:
+   - kind: ServiceAccount
+     name: werf-converge
+     namespace: production
+   EOF
+   ```
+
+2. **Create WerfBundle resource:**
+
+   ```bash
+   kubectl apply -f - <<EOF
+   apiVersion: werf.io/v1alpha1
+   kind: WerfBundle
+   metadata:
+     name: my-app
+     namespace: k8s-werf-operator-go-system
+   spec:
+     registry:
+       url: ghcr.io/org/my-app-bundle
+       pollInterval: 15m
+     converge:
+       serviceAccountName: werf-converge
+   EOF
+   ```
+
+3. **Check status:**
+
+   ```bash
+   kubectl get werfbundle -A
+   kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+   kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
+   ```
+
+## Running Tests
+
+### Unit and Integration Tests
+
+Tests internal components without requiring a cluster:
+
+```bash
+make test
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+Shows coverage for:
+- API types validation
+- Registry client tag handling
+- Job specification builder
+- Controller reconciliation logic
 
-**Install the CRDs into the cluster:**
+### End-to-End Tests
 
-```sh
-make install
+Tests the operator against a real Kubernetes cluster (Kind). Requires `kind` and `docker`.
+
+```bash
+make local-test
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+This will:
+1. Create a local Kind cluster
+2. Build and load the operator image
+3. Deploy CRDs and operator
+4. Run E2E test scenarios:
+   - Missing ServiceAccount handling
+   - Invalid registry error handling
+   - Job lifecycle and cleanup
+5. Clean up the cluster
 
-```sh
-make deploy IMG=<some-registry>/k8s-werf-operator-go:tag
-```
+## Documentation
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+- **[DESIGN.md](.notes/DESIGN.md)** - Architecture and design decisions
+- **[PLAN.md](.notes/PLAN.md)** - Implementation roadmap for all slices
+- **[RBAC Setup](docs/job-rbac.md)** - Detailed RBAC configuration guide
+- **[JOURNAL.md](.notes/JOURNAL.md)** - Development notes and lessons learned
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+## Troubleshooting
 
-```sh
-kubectl apply -k config/samples/
-```
+### Bundle stuck in "Syncing" state
 
->**NOTE**: Ensure that the samples has default values to test it out.
+- Check ServiceAccount exists in target namespace:
+  ```bash
+  kubectl get sa werf-converge -n <target-namespace>
+  ```
+- Check operator logs for errors:
+  ```bash
+  kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
+  ```
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+### Registry connection fails
 
-```sh
-kubectl delete -k config/samples/
-```
+- Verify registry URL is correct and accessible
+- Check network connectivity from operator pod
+- For private registries, credentials must be configured (Slice 2 feature)
 
-**Delete the APIs(CRDs) from the cluster:**
+### Job not running
 
-```sh
-make uninstall
-```
+- Check if werf image is available: `werf:latest` from `ghcr.io/werf/werf`
+- Verify ServiceAccount has permissions to create necessary resources
+- Check Job logs: `kubectl logs job/<job-name> -n <namespace>`
 
-**UnDeploy the controller from the cluster:**
+## Development
 
-```sh
-make undeploy
-```
+For developers working on the operator:
 
-## Project Distribution
+1. **Local development:**
+   ```bash
+   # Run tests
+   make test
 
-Following the options to release and provide this solution to the users.
+   # Build binary
+   make build
 
-### By providing a bundle with all YAML files
+   # Generate manifests
+   make manifests
 
-1. Build the installer for the image built and published in the registry:
+   # Lint code
+   make lint
+   ```
 
-```sh
-make build-installer IMG=<some-registry>/k8s-werf-operator-go:tag
-```
+2. **Creating a development cluster:**
+   ```bash
+   make local-test
+   ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+3. **Cleaning up:**
+   ```bash
+   make cleanup-test-local
+   ```
 
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/k8s-werf-operator-go/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+See [DESIGN.md](.notes/DESIGN.md) and [PLAN.md](.notes/PLAN.md) for architecture details.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+Contributions are welcome! Before starting work:
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+1. Check [PLAN.md](.notes/PLAN.md) for current work and priorities
+2. Each slice adds a single unit of end-to-end functionality
+3. All changes must include tests
+4. Run `make test` before submitting changes
 
 ## License
 
-Copyright 2025.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+## Next Steps
 
-    http://www.apache.org/licenses/LICENSE-2.0
+What's coming in Slice 2 and beyond:
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+- **Slice 2:** Enhanced registry integration with ETag caching, exponential backoff, and improved error handling
+- **Slice 3:** Values management and multi-namespace support
+- **Slice 4:** Drift detection and automatic correction
+- **Slice 5:** Advanced features including semantic versioning and username/password auth
 
+Current plans and implementation details are in [PLAN.md](.notes/PLAN.md).

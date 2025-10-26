@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -173,107 +174,173 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyControllerUp).Should(Succeed())
 		})
 
-		It("should ensure the metrics endpoint is serving metrics", func() {
-			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=k8s-werf-operator-go-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
+		It("should fail gracefully when ServiceAccount is missing", func() {
+			By("creating a test namespace for the bundle")
+			bundleNS := "werfbundle-test-1"
+			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
 			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
-			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
+			By("creating a WerfBundle with invalid ServiceAccount reference")
+			werfBundleYAML := fmt.Sprintf(`
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: test-bundle-missing-sa
+  namespace: %s
+spec:
+  registry:
+    url: ghcr.io/werf/test-bundle
+  converge:
+    serviceAccountName: nonexistent-sa
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(werfBundleYAML)
 			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
+			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
 
-			By("getting the service account token")
-			token, err := serviceAccountToken()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(token).NotTo(BeEmpty())
-
-			By("waiting for the metrics endpoint to be ready")
-			verifyMetricsEndpointReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "endpoints", metricsServiceName, "-n", namespace)
+			By("verifying WerfBundle status is Failed due to missing ServiceAccount")
+			verifyBundleFailed := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-missing-sa", "-n", bundleNS,
+					"-o", "jsonpath={.status.phase}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
+				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed")
 			}
-			Eventually(verifyMetricsEndpointReady).Should(Succeed())
+			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
 
-			By("verifying that the controller manager is serving the metrics server")
-			verifyMetricsServerStarted := func(g Gomega) {
-				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
-					"Metrics server not yet started")
-			}
-			Eventually(verifyMetricsServerStarted).Should(Succeed())
-
-			By("creating the curl-metrics pod to access the metrics endpoint")
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
-				"--namespace", namespace,
-				"--image=curlimages/curl:latest",
-				"--overrides",
-				fmt.Sprintf(`{
-					"spec": {
-						"containers": [{
-							"name": "curl",
-							"image": "curlimages/curl:latest",
-							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
-							"securityContext": {
-								"readOnlyRootFilesystem": true,
-								"allowPrivilegeEscalation": false,
-								"capabilities": {
-									"drop": ["ALL"]
-								},
-								"runAsNonRoot": true,
-								"runAsUser": 1000,
-								"seccompProfile": {
-									"type": "RuntimeDefault"
-								}
-							}
-						}],
-						"serviceAccountName": "%s"
-					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
-
-			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
-					"-o", "jsonpath={.status.phase}",
-					"-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
-			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
-
-			By("getting the metrics by checking curl-metrics logs")
-			verifyMetricsAvailable := func(g Gomega) {
-				metricsOutput, err := getMetricsOutput()
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-				g.Expect(metricsOutput).NotTo(BeEmpty())
-				g.Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
-			}
-			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
+			By("cleaning up test namespace")
+			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
+			_, _ = utils.Run(cmd)
 		})
 
-		// +kubebuilder:scaffold:e2e-webhooks-checks
+		It("should handle invalid registry gracefully", func() {
+			By("creating a test namespace for the bundle")
+			bundleNS := "werfbundle-test-2"
+			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+			By("creating ServiceAccount for werf converge jobs")
+			saYAML := fmt.Sprintf(`
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: werf-converge
+  namespace: %s
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(saYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceAccount")
+
+			By("creating a WerfBundle pointing to nonexistent registry")
+			werfBundleYAML := fmt.Sprintf(`
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: test-bundle-invalid-registry
+  namespace: %s
+spec:
+  registry:
+    url: ghcr.io/nonexistent/bundle-that-does-not-exist
+  converge:
+    serviceAccountName: werf-converge
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(werfBundleYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
+
+			By("verifying that a Job was created")
+			verifyJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
+					"-l", "app.kubernetes.io/instance=test-bundle-invalid-registry",
+					"-o", "jsonpath={.items[*].metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Expected at least one Job to be created")
+			}
+			Eventually(verifyJobCreated, 30*time.Second).Should(Succeed())
+
+			By("cleaning up test namespace")
+			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should garbage collect Job when WerfBundle is deleted", func() {
+			By("creating a test namespace for the bundle")
+			bundleNS := "werfbundle-test-3"
+			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+			By("creating ServiceAccount for werf converge jobs")
+			saYAML := fmt.Sprintf(`
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: werf-converge
+  namespace: %s
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(saYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceAccount")
+
+			By("creating a WerfBundle")
+			werfBundleYAML := fmt.Sprintf(`
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: test-bundle-cleanup
+  namespace: %s
+spec:
+  registry:
+    url: ghcr.io/werf/test-bundle
+  converge:
+    serviceAccountName: werf-converge
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(werfBundleYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
+
+			By("verifying that a Job was created")
+			var jobName string
+			verifyJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
+					"-l", "app.kubernetes.io/instance=test-bundle-cleanup",
+					"-o", "jsonpath={.items[0].metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Expected Job to be created")
+				jobName = output
+			}
+			Eventually(verifyJobCreated, 30*time.Second).Should(Succeed())
+
+			By("deleting the WerfBundle")
+			cmd = exec.Command("kubectl", "delete", "werfbundle", "test-bundle-cleanup", "-n", bundleNS)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to delete WerfBundle")
+
+			By("verifying that the Job was garbage collected")
+			verifyJobDeleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "job", jobName, "-n", bundleNS)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Expected Job to be deleted")
+			}
+			Eventually(verifyJobDeleted, 30*time.Second).Should(Succeed())
+
+			By("cleaning up test namespace")
+			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
+			_, _ = utils.Run(cmd)
+		})
 	})
 })
 

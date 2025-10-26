@@ -200,6 +200,18 @@ spec:
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
 
+			By("verifying that NO Job was created (controller must fail before creating Job)")
+			verifyNoJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
+					"-l", "app.kubernetes.io/instance=test-bundle-missing-sa",
+					"-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				// Empty items list means [] or no output
+				g.Expect(output).To(MatchRegexp("^\\[\\]?$"), "Expected NO jobs to be created when ServiceAccount missing")
+			}
+			Eventually(verifyNoJobCreated, 30*time.Second).Should(Succeed())
+
 			By("verifying WerfBundle status is Failed due to missing ServiceAccount")
 			verifyBundleFailed := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-missing-sa", "-n", bundleNS,

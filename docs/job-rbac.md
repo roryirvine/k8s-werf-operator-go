@@ -102,6 +102,30 @@ resources: ["deployments"]
 verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
 ```
 
+## Understanding Job Labels
+
+When the operator creates a Job to run `werf converge`, it adds standard Kubernetes labels for identification and management:
+
+| Label | Value | Purpose |
+|-------|-------|---------|
+| `app.kubernetes.io/name` | `werf-operator` | Identifies this Job is managed by the Werf Operator |
+| `app.kubernetes.io/instance` | Bundle name (e.g., `my-app`) | Identifies which WerfBundle created this Job |
+| `app.kubernetes.io/managed-by` | `werf-operator` | Confirms the operator manages this resource |
+
+**Finding Jobs for a specific WerfBundle:**
+
+Use the `instance` label to find Jobs created for a specific bundle:
+
+```bash
+# Find all jobs for the "my-app" WerfBundle
+kubectl get jobs -n my-app-prod -l app.kubernetes.io/instance=my-app
+
+# Watch logs of the latest job for "my-app"
+kubectl logs -n my-app-prod \
+  -l app.kubernetes.io/instance=my-app,app.kubernetes.io/name=werf-operator \
+  -f --max-log-requests=1
+```
+
 ## Using a Custom ServiceAccount Name
 
 By default, WerfBundle uses ServiceAccount `werf-converge`. To use a different name:
@@ -148,7 +172,7 @@ ServiceAccount werf-converge not found in namespace my-app-prod
 
 5. **Check Job's status** after WerfBundle is created:
 ```bash
-kubectl get jobs -n my-app-prod -l werf.io/bundle=my-app
+kubectl get jobs -n my-app-prod -l app.kubernetes.io/instance=my-app
 kubectl describe job <job-name> -n my-app-prod  # Check Events for auth errors
 ```
 

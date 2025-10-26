@@ -88,7 +88,9 @@ func TestReconcile_CreateWerfBundle_CreatesJob(t *testing.T) {
 	}
 
 	job := jobs.Items[0]
-	if job.Spec.Template.Spec.Containers[0].Args[len(job.Spec.Template.Spec.Containers[0].Args)-1] != "ghcr.io/test/bundle:v1.0.0" {
+	args := job.Spec.Template.Spec.Containers[0].Args
+	lastArg := args[len(args)-1]
+	if lastArg != "ghcr.io/test/bundle:v1.0.0" {
 		t.Errorf("job bundle ref incorrect")
 	}
 

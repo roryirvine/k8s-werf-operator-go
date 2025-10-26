@@ -168,7 +168,10 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	jobSpec, err := jobBuilder.Build(latestTag)
 	if err != nil {
 		log.Error(err, "failed to build Job")
-		r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to build Job: %v", err))
+		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to build Job: %v", err)); err != nil {
+			log.Error(err, "failed to update status after job build failure")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -184,7 +187,10 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Job doesn't exist, create it
 		if err := r.Create(ctx, jobSpec); err != nil {
 			log.Error(err, "failed to create Job")
-			r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to create Job: %v", err))
+			if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
+				log.Error(err, "failed to update status after job creation failure")
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{}, nil
 		}
 		log.Info("Job created successfully", "jobName", jobSpec.Name)
@@ -198,7 +204,10 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Check Job status
 	if existingJob.Status.Succeeded > 0 {
 		log.Info("Job succeeded, updating status to Synced", "tag", latestTag)
-		r.updateStatusSynced(ctx, bundle, latestTag)
+		if err := r.updateStatusSynced(ctx, bundle, latestTag); err != nil {
+			log.Error(err, "failed to update status after job success")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -218,7 +227,11 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // updateStatusSyncing sets status to Syncing and clears error.
 // Returns error if status update fails so caller can decide to requeue.
-func (r *WerfBundleReconciler) updateStatusSyncing(ctx context.Context, bundle *werfv1alpha1.WerfBundle, tag string) error {
+func (r *WerfBundleReconciler) updateStatusSyncing(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	tag string,
+) error {
 	bundle.Status.Phase = werfv1alpha1.PhaseSyncing
 	if tag != "" {
 		bundle.Status.LastAppliedTag = tag
@@ -231,7 +244,11 @@ func (r *WerfBundleReconciler) updateStatusSyncing(ctx context.Context, bundle *
 
 // updateStatusSynced sets status to Synced with timestamp.
 // Returns error if status update fails so caller can decide to requeue.
-func (r *WerfBundleReconciler) updateStatusSynced(ctx context.Context, bundle *werfv1alpha1.WerfBundle, tag string) error {
+func (r *WerfBundleReconciler) updateStatusSynced(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	tag string,
+) error {
 	bundle.Status.Phase = werfv1alpha1.PhaseSynced
 	bundle.Status.LastAppliedTag = tag
 	bundle.Status.LastErrorMessage = ""
@@ -243,7 +260,11 @@ func (r *WerfBundleReconciler) updateStatusSynced(ctx context.Context, bundle *w
 
 // updateStatusFailed sets status to Failed with error message.
 // Returns error if status update fails so caller can decide to requeue.
-func (r *WerfBundleReconciler) updateStatusFailed(ctx context.Context, bundle *werfv1alpha1.WerfBundle, errMsg string) error {
+func (r *WerfBundleReconciler) updateStatusFailed(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	errMsg string,
+) error {
 	bundle.Status.Phase = werfv1alpha1.PhaseFailed
 	bundle.Status.LastErrorMessage = errMsg
 

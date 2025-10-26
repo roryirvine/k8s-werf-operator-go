@@ -148,10 +148,12 @@ This will:
 1. Create a local Kind cluster
 2. Build and load the operator image
 3. Deploy CRDs and operator
-4. Run E2E test scenarios:
-   - Missing ServiceAccount handling
-   - Invalid registry error handling
-   - Job lifecycle and cleanup
+4. Run E2E test scenarios (verifying operator orchestration):
+   - Missing ServiceAccount → fail-fast validation
+   - Invalid registry → Job orchestration and failure detection
+   - Delete WerfBundle → Job garbage collection via owner references
+
+   **Note:** Jobs will fail in these tests (no real registry/bundles in Slice 1). This is expected - tests verify the operator correctly orchestrates Jobs and handles failures, not that deployments succeed.
 5. Clean up the cluster
 
 ## Documentation

@@ -199,7 +199,7 @@ spec:
 			_, _ = utils.Run(cmd)
 		})
 
-		It("should handle invalid registry gracefully", func() {
+		It("should fail when registry lookup fails", func() {
 			By("creating a test namespace for the bundle")
 			bundleNS := "werfbundle-test-2"
 			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
@@ -220,7 +220,7 @@ metadata:
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceAccount")
 
-			By("creating a WerfBundle pointing to nonexistent registry")
+			By("creating a WerfBundle pointing to inaccessible registry")
 			werfBundleYAML := fmt.Sprintf(`
 apiVersion: werf.io/v1alpha1
 kind: WerfBundle
@@ -239,40 +239,17 @@ spec:
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
 
-			By("verifying that a Job was created")
-			var jobName string
-			verifyJobCreated := func(g Gomega) {
+			By("verifying that NO Job was created (controller fails at registry lookup stage)")
+			verifyNoJobCreated := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
 					"-l", "app.kubernetes.io/instance=test-bundle-invalid-registry",
-					"-o", "jsonpath={.items[0].metadata.name}")
+					"-o", "jsonpath={.items}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).NotTo(BeEmpty(), "Expected Job to be created")
-				jobName = output
+				// Empty items list means [] or no output
+				g.Expect(output).To(MatchRegexp("^\\[\\]?$"), "Expected NO jobs to be created when registry lookup fails")
 			}
-			Eventually(verifyJobCreated, 30*time.Second).Should(Succeed())
-
-			By("verifying that Job Pod started (attempted to run werf)")
-			verifyPodStarted := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "-n", bundleNS,
-					"-l", fmt.Sprintf("batch.kubernetes.io/job-name=%s", jobName),
-					"-o", "jsonpath={.items[0].status.phase}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(MatchRegexp("(Running|Failed|Succeeded)"), "Expected Pod to have started")
-			}
-			Eventually(verifyPodStarted, 30*time.Second).Should(Succeed())
-
-			By("verifying that Job fails due to invalid registry")
-			verifyJobFailed := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "job", jobName, "-n", bundleNS,
-					"-o", "jsonpath={.status.failed}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				// Failed count > 0 means job has failed
-				g.Expect(output).To(MatchRegexp("[1-9]"), "Expected Job to fail")
-			}
-			Eventually(verifyJobFailed, 60*time.Second).Should(Succeed())
+			Eventually(verifyNoJobCreated, 30*time.Second).Should(Succeed())
 
 			By("verifying WerfBundle status is Failed due to registry error")
 			verifyBundleFailed := func(g Gomega) {
@@ -280,9 +257,9 @@ spec:
 					"-o", "jsonpath={.status.phase}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed")
+				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed due to registry error")
 			}
-			Eventually(verifyBundleFailed, 60*time.Second).Should(Succeed())
+			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
 
 			By("cleaning up test namespace")
 			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")

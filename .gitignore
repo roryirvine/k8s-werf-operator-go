@@ -31,7 +31,12 @@ go.work.sum
 # .idea/
 .vscode/
 
+# Build artifacts
+bin/
+dist/
+cover.out
+
 # Project notes
 .notes/
 CLAUDE.md
-AGENTS.md
+

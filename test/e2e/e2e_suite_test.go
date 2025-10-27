@@ -83,10 +83,17 @@ var _ = BeforeSuite(func() {
 		}
 	}
 
+	By("generating CRD manifests")
+	cmd = exec.Command("make", "manifests")
+	output, err := utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to generate manifests")
+	_, _ = fmt.Fprintf(GinkgoWriter, "manifests output: %s\n", output)
+
 	By("installing WerfBundle CRDs")
 	cmd = exec.Command("make", "install")
-	_, err = utils.Run(cmd)
+	output, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
+	_, _ = fmt.Fprintf(GinkgoWriter, "install output: %s\n", output)
 
 	By("waiting for WerfBundle CRD to be available")
 	verifyWerfBundleCRD := func(g Gomega) {
@@ -94,7 +101,7 @@ var _ = BeforeSuite(func() {
 		_, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred(), "WerfBundle CRD not yet available")
 	}
-	Eventually(verifyWerfBundleCRD, 30*time.Second, time.Second).Should(Succeed())
+	Eventually(verifyWerfBundleCRD, 60*time.Second, time.Second).Should(Succeed())
 
 	By("deploying the controller-manager")
 	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))

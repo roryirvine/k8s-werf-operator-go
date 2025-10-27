@@ -1,0 +1,5 @@
+# This kustomization.yaml is for local development.
+# Install CRD into a cluster by running: make install
+# Uninstall CRD from a cluster by running: make uninstall
+resources:
+- bases/werf.io_werfbundles.yaml

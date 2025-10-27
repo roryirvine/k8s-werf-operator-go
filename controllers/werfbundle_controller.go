@@ -57,7 +57,7 @@ type WerfBundleReconciler struct {
 	RegistryClient registry.Client
 }
 
-// +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch
+// +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get

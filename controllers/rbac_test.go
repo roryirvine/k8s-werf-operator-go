@@ -29,11 +29,11 @@ func TestRBACManifestGeneration(t *testing.T) {
 		resources []string
 		verbs     []string
 	}{
-		// WerfBundle resources
+		// WerfBundle resources - need update/patch for finalizers
 		{
 			apiGroup:  "werf.io",
 			resources: []string{"werfbundles"},
-			verbs:     []string{"get", "list", "watch"},
+			verbs:     []string{"get", "list", "watch", "update", "patch"},
 		},
 		// WerfBundle status
 		{
@@ -47,11 +47,17 @@ func TestRBACManifestGeneration(t *testing.T) {
 			resources: []string{"jobs"},
 			verbs:     []string{"create", "get", "list", "watch", "delete"},
 		},
-		// Core resources (secrets, serviceaccounts)
+		// Secrets - only needs get
 		{
 			apiGroup:  "",
-			resources: []string{"secrets", "serviceaccounts"},
+			resources: []string{"secrets"},
 			verbs:     []string{"get"},
+		},
+		// ServiceAccounts - needs list/watch for controller-runtime cache
+		{
+			apiGroup:  "",
+			resources: []string{"serviceaccounts"},
+			verbs:     []string{"get", "list", "watch"},
 		},
 	}
 

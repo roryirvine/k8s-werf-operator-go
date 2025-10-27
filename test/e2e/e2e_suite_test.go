@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -86,6 +87,14 @@ var _ = BeforeSuite(func() {
 	cmd = exec.Command("make", "install")
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("waiting for WerfBundle CRD to be available")
+	verifyWerfBundleCRD := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "crd", "werfbundles.werf.io")
+		_, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred(), "WerfBundle CRD not yet available")
+	}
+	Eventually(verifyWerfBundleCRD, 30*time.Second, time.Second).Should(Succeed())
 
 	By("deploying the controller-manager")
 	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))

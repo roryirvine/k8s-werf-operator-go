@@ -22,7 +22,7 @@ This is early-stage software (v1alpha1 API). The operator supports basic bundle 
 - Helm integration
 - Custom value overrides
 
-See [Slices 2-5 in PLAN.md](.notes/PLAN.md) for the full roadmap.
+See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
 
 ## Quick Start
 
@@ -157,10 +157,9 @@ This will:
 
 ## Documentation
 
-- **[DESIGN.md](.notes/DESIGN.md)** - Architecture and design decisions
-- **[PLAN.md](.notes/PLAN.md)** - Implementation roadmap for all slices
+- **[DESIGN.md](docs/DESIGN.md)** - Architecture and design decisions
+- **[PLAN.md](docs/PLAN.md)** - Implementation roadmap for all slices
 - **[RBAC Setup](docs/job-rbac.md)** - Detailed RBAC configuration guide
-- **[JOURNAL.md](.notes/JOURNAL.md)** - Development notes and lessons learned
 
 ## Troubleshooting
 
@@ -216,13 +215,13 @@ For developers working on the operator:
    make cleanup-test-local
    ```
 
-See [DESIGN.md](.notes/DESIGN.md) and [PLAN.md](.notes/PLAN.md) for architecture details.
+See [DESIGN.md](docs/DESIGN.md) and [PLAN.md](docs/PLAN.md) for architecture details.
 
 ## Contributing
 
 Contributions are welcome! Before starting work:
 
-1. Check [PLAN.md](.notes/PLAN.md) for current work and priorities
+1. Check [PLAN.md](docs/PLAN.md) for current work and priorities
 2. Each slice adds a single unit of end-to-end functionality
 3. All changes must include tests
 4. Run `make test` before submitting changes
@@ -240,4 +239,4 @@ What's coming in Slice 2 and beyond:
 - **Slice 4:** Drift detection and automatic correction
 - **Slice 5:** Advanced features including semantic versioning and username/password auth
 
-Current plans and implementation details are in [PLAN.md](.notes/PLAN.md).
+Current plans and implementation details are in [PLAN.md](docs/PLAN.md).

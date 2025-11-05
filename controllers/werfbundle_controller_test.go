@@ -577,3 +577,93 @@ func TestReconcile_SuccessAfterFailures_ResetsCounter(t *testing.T) {
 			updatedBundle.Status.Phase)
 	}
 }
+
+func TestE2E_CreateBundle_CreatesJob(t *testing.T) {
+	// E2E test demonstrating the full bundle creation and job spawning workflow
+	ctx := context.Background()
+
+	bundleName := "test-e2e-create"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/e2e",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	// Setup fake registry with tags
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/e2e", []string{"v1.0.0", "v1.1.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// Reconcile: should create job for latest tag (v1.1.0)
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Should requeue to monitor job
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after job creation")
+	}
+
+	// Verify bundle status updated to Syncing
+	syncingBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, syncingBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if syncingBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing, got %s", syncingBundle.Status.Phase)
+	}
+
+	if syncingBundle.Status.LastAppliedTag != "v1.1.0" {
+		t.Errorf("expected LastAppliedTag=v1.1.0, got %s", syncingBundle.Status.LastAppliedTag)
+	}
+
+	// Verify job was created
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	jobFound := false
+	for _, job := range jobs.Items {
+		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == bundleName {
+			jobFound = true
+			// Verify job spec references correct tag
+			if len(job.Spec.Template.Spec.Containers) > 0 {
+				args := job.Spec.Template.Spec.Containers[0].Args
+				if len(args) == 0 {
+					t.Error("expected job to have args")
+				}
+			}
+			break
+		}
+	}
+
+	if !jobFound {
+		t.Error("expected job owned by bundle to be created")
+	}
+}

@@ -49,7 +49,9 @@ func TestETagRoundTripper_SetIfNoneMatch(t *testing.T) {
 		t.Errorf("ETag not captured: %s", transport.CapturedETag())
 	}
 
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("failed to close response body: %v", err)
+	}
 }
 
 func TestETagRoundTripper_NotModified_Error(t *testing.T) {
@@ -142,5 +144,7 @@ func TestETagRoundTripper_Success(t *testing.T) {
 		t.Errorf("ETag not captured on 200: %s", transport.CapturedETag())
 	}
 
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("failed to close response body: %v", err)
+	}
 }

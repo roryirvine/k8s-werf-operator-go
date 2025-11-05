@@ -104,24 +104,10 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Validate ServiceAccount exists before attempting to create Job
-	saKey := types.NamespacedName{
-		Name:      bundle.Spec.Converge.ServiceAccountName,
-		Namespace: bundle.Namespace,
-	}
-	sa := &corev1.ServiceAccount{}
-	if err := r.Get(ctx, saKey, sa); err != nil {
-		if apierrors.IsNotFound(err) {
-			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
-				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
-			log.Info("ServiceAccount not found", "serviceAccount", saKey)
-			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
-				log.Error(err, "failed to update status after SA validation")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
-		}
-		log.Error(err, "failed to get ServiceAccount")
-		return ctrl.Result{}, err
+	if err := r.validateServiceAccount(ctx, bundle); err != nil {
+		// Status was already updated to Failed by validateServiceAccount
+		// Return success (no error) but stop processing further
+		return ctrl.Result{}, nil
 	}
 
 	// Parse poll interval from spec, default to 15 minutes
@@ -139,40 +125,7 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Note: Authentication not yet implemented (Slice 2) - always uses nil for auth
 	tags, etag, err := r.RegistryClient.ListTagsWithETag(ctx, bundle.Spec.Registry.URL, nil, bundle.Status.LastETag)
 	if err != nil {
-		var notModified *registry.NotModifiedError
-		if errors.As(err, &notModified) {
-			// Content hasn't changed - cached response is still valid
-			// Requeue after poll interval + jitter to check again later
-			log.Info("registry content unchanged (cached ETag valid)")
-			requeueInterval := registry.AddJitter(pollInterval)
-			return ctrl.Result{RequeueAfter: requeueInterval}, nil
-		}
-
-		// Registry error - implement retry logic with exponential backoff
-		bundle.Status.ConsecutiveFailures++
-		now := metav1.Now()
-		bundle.Status.LastErrorTime = &now
-		log.Info("registry poll failed, incrementing retry counter", "failures", bundle.Status.ConsecutiveFailures, "maxRetries", maxConsecutiveFailures)
-
-		// Check if we've exceeded max retries (allow up to maxConsecutiveFailures attempts)
-		if bundle.Status.ConsecutiveFailures > maxConsecutiveFailures {
-			log.Info("max consecutive failures reached, marking bundle as Failed")
-			errMsg := fmt.Sprintf("Registry error after %d retries: %v", maxConsecutiveFailures, err)
-			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
-				log.Error(err, "failed to update status after max retries exceeded")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
-		}
-
-		// Calculate backoff and requeue
-		backoff := registry.CalculateBackoff(bundle.Status.ConsecutiveFailures)
-		log.Info("requeuing with exponential backoff", "backoff", backoff)
-		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Registry error (attempt %d/%d): %v", bundle.Status.ConsecutiveFailures, maxConsecutiveFailures, err)); err != nil {
-			log.Error(err, "failed to update status after registry error")
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: backoff}, nil
+		return r.handleRegistryError(ctx, bundle, err, pollInterval)
 	}
 
 	// Reset consecutive failures on successful registry access
@@ -213,6 +166,104 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// New tag found - ensure Job exists and monitor it
+	return r.ensureJobExists(ctx, bundle, latestTag)
+}
+
+// validateServiceAccount checks that the ServiceAccount exists in the bundle's namespace.
+// Returns error if SA doesn't exist or if status update fails. If SA is not found,
+// status is updated to Failed before returning the error to prevent job creation.
+func (r *WerfBundleReconciler) validateServiceAccount(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	saKey := types.NamespacedName{
+		Name:      bundle.Spec.Converge.ServiceAccountName,
+		Namespace: bundle.Namespace,
+	}
+	sa := &corev1.ServiceAccount{}
+	if err := r.Get(ctx, saKey, sa); err != nil {
+		if apierrors.IsNotFound(err) {
+			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
+				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
+			log.Info("ServiceAccount not found", "serviceAccount", saKey)
+			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+				log.Error(err, "failed to update status after SA validation")
+				return err
+			}
+			// Return a sentinel error to stop processing and prevent job creation
+			return errors.New("serviceaccount not found")
+		}
+		log.Error(err, "failed to get ServiceAccount")
+		return err
+	}
+	return nil
+}
+
+// handleRegistryError handles registry polling errors with retry logic and exponential backoff.
+// Returns early with a requeue result if the error should be retried.
+// Returns nil, nil if max retries exceeded (stop retrying but don't propagate error).
+func (r *WerfBundleReconciler) handleRegistryError(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	registryErr error,
+	pollInterval time.Duration,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	var notModified *registry.NotModifiedError
+	if errors.As(registryErr, &notModified) {
+		// Content hasn't changed - cached response is still valid
+		// Requeue after poll interval + jitter to check again later
+		log.Info("registry content unchanged (cached ETag valid)")
+		requeueInterval := registry.AddJitter(pollInterval)
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+	}
+
+	// Registry error - implement retry logic with exponential backoff
+	bundle.Status.ConsecutiveFailures++
+	now := metav1.Now()
+	bundle.Status.LastErrorTime = &now
+	log.Info("registry poll failed, incrementing retry counter",
+		"failures", bundle.Status.ConsecutiveFailures,
+		"maxRetries", maxConsecutiveFailures)
+
+	// Check if we've exceeded max retries (allow up to maxConsecutiveFailures attempts)
+	if bundle.Status.ConsecutiveFailures > maxConsecutiveFailures {
+		log.Info("max consecutive failures reached, marking bundle as Failed")
+		errMsg := fmt.Sprintf("Registry error after %d retries: %v",
+			maxConsecutiveFailures, registryErr)
+		if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+			log.Error(err, "failed to update status after max retries exceeded")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Calculate backoff and requeue
+	backoff := registry.CalculateBackoff(bundle.Status.ConsecutiveFailures)
+	log.Info("requeuing with exponential backoff", "backoff", backoff)
+	errMsg := fmt.Sprintf("Registry error (attempt %d/%d): %v",
+		bundle.Status.ConsecutiveFailures, maxConsecutiveFailures, registryErr)
+	if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+		log.Error(err, "failed to update status after registry error")
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: backoff}, nil
+}
+
+// ensureJobExists builds a Job for the given tag, creates it if it doesn't exist,
+// and monitors its status for completion.
+// Returns a requeue result if the Job is still running.
+// Returns nil, nil if the Job succeeds or fails.
+func (r *WerfBundleReconciler) ensureJobExists(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	latestTag string,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
 	log.Info("new tag found, ensuring converge job exists", "tag", latestTag)
 	if err := r.updateStatusSyncing(ctx, bundle, latestTag); err != nil {
 		log.Error(err, "failed to update status to Syncing")
@@ -243,7 +294,8 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Job doesn't exist, create it
 		if err := r.Create(ctx, jobSpec); err != nil {
 			log.Error(err, "failed to create Job")
-			if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
+			if err := r.updateStatusFailed(ctx, bundle,
+				fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
 				log.Error(err, "failed to update status after job creation failure")
 				return ctrl.Result{}, err
 			}
@@ -269,7 +321,8 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	if existingJob.Status.Failed > 0 {
 		log.Info("Job failed", "jobName", existingJob.Name)
-		if err := r.updateStatusFailed(ctx, bundle, "Job failed, see job logs for details"); err != nil {
+		if err := r.updateStatusFailed(ctx, bundle,
+			"Job failed, see job logs for details"); err != nil {
 			log.Error(err, "failed to update status after job failure")
 			return ctrl.Result{}, err
 		}

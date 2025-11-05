@@ -3,10 +3,9 @@ package registry
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
+	"net/http"
 	"sort"
-	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -124,47 +123,49 @@ func (c *OCIClient) GetLatestTag(ctx context.Context, repoURL string, auth authn
 	return tags[len(tags)-1], nil
 }
 
-// CalculateETag returns a hash of the sorted tag list.
-// Used as a simple ETag substitute for detecting tag list changes.
-// The hash ensures that the same set of tags always produces the same ETag,
-// even if they arrive in different order from the registry.
-func CalculateETag(tags []string) string {
-	// Sort for consistent hashing
-	sortedTags := make([]string, len(tags))
-	copy(sortedTags, tags)
-	sort.Strings(sortedTags)
-
-	// Create a single string from sorted tags and hash it
-	tagString := strings.Join(sortedTags, ",")
-	hash := sha256.Sum256([]byte(tagString))
-
-	// Return first 16 characters of hex-encoded hash as ETag
-	return fmt.Sprintf("%x", hash)[:16]
-}
-
 // ListTagsWithETag returns tags with ETag-based caching support.
-// If the current tag list matches lastETag, returns NotModifiedError
+// Uses HTTP If-None-Match headers to implement conditional requests.
+// If the registry returns 304 Not Modified (ETag matches), returns NotModifiedError
 // to indicate the cached response is still valid (no download needed).
-// On success, returns the tag list and a new ETag for future requests.
+// On success, returns the tag list and the ETag from response headers for future requests.
 func (c *OCIClient) ListTagsWithETag(
 	ctx context.Context,
 	repoURL string,
 	auth authn.Authenticator,
 	lastETag string,
 ) ([]string, string, error) {
-	tags, err := c.ListTags(ctx, repoURL, auth)
+	ref, err := name.NewRepository(repoURL)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("invalid repository URL: %w", err)
 	}
 
-	// Calculate ETag for current tag list
-	currentETag := CalculateETag(tags)
+	// Get the default HTTP transport
+	baseTransport := http.DefaultTransport
 
-	// If ETag matches, return NotModifiedError (cached response valid)
-	if lastETag != "" && currentETag == lastETag {
-		return nil, currentETag, &NotModifiedError{}
+	// Wrap it with our ETag-aware transport
+	etagTransport := newETagRoundTripper(baseTransport, lastETag)
+
+	// Call remote.List with our ETag transport
+	tags, err := remote.List(
+		ref,
+		remote.WithContext(ctx),
+		remote.WithAuth(auth),
+		remote.WithTransport(etagTransport),
+	)
+
+	// Check if we got NotModifiedError from the transport
+	if notModified, ok := err.(*NotModifiedError); ok {
+		// Return NotModifiedError with captured ETag
+		return nil, etagTransport.CapturedETag(), notModified
 	}
 
-	// Return new tag list and ETag
-	return tags, currentETag, nil
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to list tags: %w", err)
+	}
+
+	// Sort tags lexicographically
+	sort.Strings(tags)
+
+	// Return tags with captured ETag from response headers
+	return tags, etagTransport.CapturedETag(), nil
 }

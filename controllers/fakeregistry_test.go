@@ -80,9 +80,8 @@ func (f *FakeRegistry) ListTagsWithETag(
 		return nil, "", err
 	}
 
-	// Use the same ETag calculation as registry.calculateETag
-	// (cannot call directly as it's unexported, so we'll duplicate logic)
-	currentETag := registry.CalculateETag(tags)
+	// Use the same ETag generation as the registry package
+	currentETag := registry.GenerateFakeETag(tags)
 
 	// If ETag matches, return NotModifiedError
 	if lastETag != "" && currentETag == lastETag {

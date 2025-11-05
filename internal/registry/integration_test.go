@@ -241,39 +241,6 @@ func TestEmptyRepository_RealRegistry(t *testing.T) {
 	}
 }
 
-// TestETagCalculation_Deterministic tests that ETag calculation is deterministic.
-func TestETagCalculation_Deterministic(t *testing.T) {
-	tags := []string{"v1.0.0", "v1.1.0", "v2.0.0"}
-
-	etag1 := CalculateETag(tags)
-	etag2 := CalculateETag(tags)
-
-	if etag1 != etag2 {
-		t.Errorf("CalculateETag not deterministic: %q != %q", etag1, etag2)
-	}
-
-	// Different order should produce same ETag (content is same)
-	shuffled := []string{"v2.0.0", "v1.0.0", "v1.1.0"}
-	etag3 := CalculateETag(shuffled)
-
-	if etag3 != etag1 {
-		t.Errorf("ETag should be same regardless of input order: %q != %q", etag3, etag1)
-	}
-}
-
-// TestETagChangesWithContent tests that ETag changes when content changes.
-func TestETagChangesWithContent(t *testing.T) {
-	tags1 := []string{"v1.0.0", "v1.1.0"}
-	tags2 := []string{"v1.0.0", "v1.1.0", "v2.0.0"}
-
-	etag1 := CalculateETag(tags1)
-	etag2 := CalculateETag(tags2)
-
-	if etag1 == etag2 {
-		t.Error("ETag should change when content changes")
-	}
-}
-
 // isNotModifiedError is a helper to check for NotModifiedError.
 func isNotModifiedError(err error) bool {
 	if err == nil {
@@ -317,12 +284,6 @@ func TestOCIProtocolHandling_RealRegistry(t *testing.T) {
 	}
 	if etag == "" {
 		t.Error("expected non-empty ETag from real registry")
-	}
-
-	// Verify the ETag is based on content (same logic we use for caching)
-	expectedETag := CalculateETag(tags)
-	if etag != expectedETag {
-		t.Errorf("ETag mismatch: got %q, expected %q", etag, expectedETag)
 	}
 }
 

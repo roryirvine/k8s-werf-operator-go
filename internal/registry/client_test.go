@@ -61,7 +61,7 @@ func (f *FakeClient) GetLatestTag(ctx context.Context, repoURL string, auth inte
 }
 
 // ListTagsWithETag returns tags with ETag support.
-// Uses the same ETag calculation as OCIClient.
+// Simulates HTTP ETag behavior by generating a deterministic ETag based on tag content.
 func (f *FakeClient) ListTagsWithETag(
 	ctx context.Context,
 	repoURL string,
@@ -73,10 +73,11 @@ func (f *FakeClient) ListTagsWithETag(
 		return nil, "", err
 	}
 
-	// Calculate ETag using same logic as OCIClient
-	currentETag := CalculateETag(tags)
+	// Generate a simple deterministic ETag for these tags
+	// In real HTTP, this comes from response headers; we simulate it here
+	currentETag := GenerateFakeETag(tags)
 
-	// If ETag matches, return NotModifiedError
+	// If ETag matches, return NotModifiedError (simulating HTTP 304)
 	if lastETag != "" && currentETag == lastETag {
 		return nil, currentETag, &NotModifiedError{}
 	}

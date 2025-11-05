@@ -154,8 +154,8 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		bundle.Status.LastErrorTime = &now
 		log.Info("registry poll failed, incrementing retry counter", "failures", bundle.Status.ConsecutiveFailures, "maxRetries", maxConsecutiveFailures)
 
-		// Check if we've exceeded max retries
-		if bundle.Status.ConsecutiveFailures >= maxConsecutiveFailures {
+		// Check if we've exceeded max retries (allow up to maxConsecutiveFailures attempts)
+		if bundle.Status.ConsecutiveFailures > maxConsecutiveFailures {
 			log.Info("max consecutive failures reached, marking bundle as Failed")
 			errMsg := fmt.Sprintf("Registry error after %d retries: %v", maxConsecutiveFailures, err)
 			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {

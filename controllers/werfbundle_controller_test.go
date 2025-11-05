@@ -349,3 +349,231 @@ func TestReconcile_MissingServiceAccount_FailsWithError(t *testing.T) {
 		t.Errorf("expected no jobs, got %d", jobCount)
 	}
 }
+
+func TestReconcile_RegistryError_ExponentialBackoff(t *testing.T) {
+	ctx := context.Background()
+
+	bundleName := "test-backoff"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/backoff",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	// Create fake registry that always returns errors
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetError("ghcr.io/test/backoff", fmt.Errorf("simulated registry error"))
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// Expected backoff sequence: 30s, 1m, 2m, 4m, 8m
+	expectedBackoffs := []time.Duration{
+		30 * time.Second,
+		1 * time.Minute,
+		2 * time.Minute,
+		4 * time.Minute,
+		8 * time.Minute,
+	}
+
+	for i, expectedBackoff := range expectedBackoffs {
+		result, err := reconciler.Reconcile(ctx, req)
+		if err != nil {
+			t.Fatalf("reconcile %d failed: %v", i, err)
+		}
+
+		// Verify requeue with exponential backoff
+		if result.RequeueAfter == 0 {
+			t.Errorf("reconcile %d: expected requeue, got none", i)
+		}
+
+		// Verify backoff is roughly in expected range with jitter
+		// Allow wider range due to ±10% jitter
+		minBackoff := expectedBackoff / 2
+		maxBackoff := expectedBackoff * 2
+		if result.RequeueAfter < minBackoff || result.RequeueAfter > maxBackoff {
+			t.Errorf("reconcile %d: requeue backoff %v outside range [%v, %v]",
+				i, result.RequeueAfter, minBackoff, maxBackoff)
+		}
+
+		// Verify ConsecutiveFailures increments
+		updatedBundle := &werfv1alpha1.WerfBundle{}
+		if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+			t.Fatalf("failed to get bundle: %v", err)
+		}
+
+		expectedFailures := int32(i + 1)
+		if updatedBundle.Status.ConsecutiveFailures != expectedFailures {
+			t.Errorf("reconcile %d: expected failures=%d, got %d",
+				i, expectedFailures, updatedBundle.Status.ConsecutiveFailures)
+		}
+
+		// Verify status is Failed
+		if updatedBundle.Status.Phase != werfv1alpha1.PhaseFailed {
+			t.Errorf("reconcile %d: expected phase Failed, got %s",
+				i, updatedBundle.Status.Phase)
+		}
+	}
+}
+
+func TestReconcile_FifthFailure_MarksAsFailed(t *testing.T) {
+	ctx := context.Background()
+
+	bundleName := "test-fifth-failure"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/fifth",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	// Initialize status with 5 consecutive failures
+	bundle.Status.ConsecutiveFailures = 5
+	if err := testk8sClient.Status().Update(ctx, bundle); err != nil {
+		t.Fatalf("failed to update status: %v", err)
+	}
+
+	// Create fake registry that always returns errors
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetError("ghcr.io/test/fifth", fmt.Errorf("simulated registry error"))
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// One more error will exceed maxConsecutiveFailures (5)
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Should NOT requeue after exceeding max retries
+	if result.RequeueAfter != 0 {
+		t.Errorf("expected no requeue after max retries, got %v", result.RequeueAfter)
+	}
+
+	// Verify status is Failed
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %s", updatedBundle.Status.Phase)
+	}
+
+	if updatedBundle.Status.LastErrorMessage == "" {
+		t.Error("expected error message to be set")
+	}
+}
+
+func TestReconcile_SuccessAfterFailures_ResetsCounter(t *testing.T) {
+	ctx := context.Background()
+
+	bundleName := "test-reset-failures"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/reset",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	// Initialize status with previous failures
+	bundle.Status.ConsecutiveFailures = 2
+	bundle.Status.Phase = werfv1alpha1.PhaseFailed
+	if err := testk8sClient.Status().Update(ctx, bundle); err != nil {
+		t.Fatalf("failed to update status: %v", err)
+	}
+
+	// Create fake registry that now returns tags (success)
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/reset", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Should requeue to wait for job
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after job creation")
+	}
+
+	// Verify ConsecutiveFailures is reset to 0
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if updatedBundle.Status.ConsecutiveFailures != 0 {
+		t.Errorf("expected ConsecutiveFailures=0, got %d",
+			updatedBundle.Status.ConsecutiveFailures)
+	}
+
+	// Verify status is Syncing (or Synced if job already completed)
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing &&
+		updatedBundle.Status.Phase != werfv1alpha1.PhaseSynced {
+		t.Errorf("expected phase Syncing or Synced, got %s",
+			updatedBundle.Status.Phase)
+	}
+}

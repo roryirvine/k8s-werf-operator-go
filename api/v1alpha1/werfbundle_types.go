@@ -108,10 +108,10 @@ type WerfBundleStatus struct {
 
 	// ConsecutiveFailures is the number of consecutive registry polling failures.
 	// Used to calculate exponential backoff. Reset to 0 on success.
-	// Marked Failed if ConsecutiveFailures >= 5.
+	// Marked Failed if ConsecutiveFailures > 5 (after 6th consecutive error).
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=5
+	// +kubebuilder:validation:Maximum=6
 	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`
 
 	// LastErrorTime is the timestamp of the last error encountered.

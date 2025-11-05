@@ -114,9 +114,9 @@ spec:
                 description: |-
                   ConsecutiveFailures is the number of consecutive registry polling failures.
                   Used to calculate exponential backoff. Reset to 0 on success.
-                  Marked Failed if ConsecutiveFailures >= 5.
+                  Marked Failed if ConsecutiveFailures > 5 (after 6th consecutive error).
                 format: int32
-                maximum: 5
+                maximum: 6
                 minimum: 0
                 type: integer
               lastAppliedTag:

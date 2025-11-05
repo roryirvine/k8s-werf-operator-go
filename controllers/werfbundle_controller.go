@@ -3,6 +3,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,7 +24,9 @@ import (
 )
 
 const (
-	finalizerName = "werf.io/finalizer"
+	finalizerName          = "werf.io/finalizer"
+	defaultPollInterval    = 15 * time.Minute
+	maxConsecutiveFailures = 5
 )
 
 // WerfBundleReconciler reconciles WerfBundle resources.
@@ -121,20 +124,68 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	// Poll registry for latest tag
+	// Parse poll interval from spec, default to 15 minutes
+	pollInterval := defaultPollInterval
+	if bundle.Spec.Registry.PollInterval != "" {
+		parsed, err := time.ParseDuration(bundle.Spec.Registry.PollInterval)
+		if err != nil {
+			log.Error(err, "invalid pollInterval in spec, using default", "pollInterval", bundle.Spec.Registry.PollInterval)
+		} else {
+			pollInterval = parsed
+		}
+	}
+
+	// Poll registry for latest tags with ETag caching
 	// Note: Authentication not yet implemented (Slice 2) - always uses nil for auth
-	latestTag, err := r.RegistryClient.GetLatestTag(ctx, bundle.Spec.Registry.URL, nil)
+	tags, etag, err := r.RegistryClient.ListTagsWithETag(ctx, bundle.Spec.Registry.URL, nil, bundle.Status.LastETag)
 	if err != nil {
-		log.Error(err, "failed to get latest tag from registry")
-		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Registry error: %v", err)); err != nil {
+		var notModified *registry.NotModifiedError
+		if errors.As(err, &notModified) {
+			// Content hasn't changed - cached response is still valid
+			// Requeue after poll interval + jitter to check again later
+			log.Info("registry content unchanged (cached ETag valid)")
+			requeueInterval := registry.AddJitter(pollInterval)
+			return ctrl.Result{RequeueAfter: requeueInterval}, nil
+		}
+
+		// Registry error - implement retry logic with exponential backoff
+		bundle.Status.ConsecutiveFailures++
+		now := metav1.Now()
+		bundle.Status.LastErrorTime = &now
+		log.Info("registry poll failed, incrementing retry counter", "failures", bundle.Status.ConsecutiveFailures, "maxRetries", maxConsecutiveFailures)
+
+		// Check if we've exceeded max retries
+		if bundle.Status.ConsecutiveFailures >= maxConsecutiveFailures {
+			log.Info("max consecutive failures reached, marking bundle as Failed")
+			errMsg := fmt.Sprintf("Registry error after %d retries: %v", maxConsecutiveFailures, err)
+			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+				log.Error(err, "failed to update status after max retries exceeded")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+
+		// Calculate backoff and requeue
+		backoff := registry.CalculateBackoff(bundle.Status.ConsecutiveFailures)
+		log.Info("requeuing with exponential backoff", "backoff", backoff)
+		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Registry error (attempt %d/%d): %v", bundle.Status.ConsecutiveFailures, maxConsecutiveFailures, err)); err != nil {
 			log.Error(err, "failed to update status after registry error")
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: backoff}, nil
 	}
 
+	// Reset consecutive failures on successful registry access
+	if bundle.Status.ConsecutiveFailures > 0 {
+		bundle.Status.ConsecutiveFailures = 0
+		log.Info("registry access successful, resetting failure counter")
+	}
+
+	// Update LastETag for caching
+	bundle.Status.LastETag = etag
+
 	// If no tag found, update status and wait
-	if latestTag == "" {
+	if len(tags) == 0 {
 		log.Info("no tags found in registry")
 		if bundle.Status.Phase == "" || bundle.Status.Phase == werfv1alpha1.PhaseFailed {
 			if err := r.updateStatusSyncing(ctx, bundle, ""); err != nil {
@@ -142,8 +193,13 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, err
 			}
 		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		// Requeue after poll interval + jitter
+		requeueInterval := registry.AddJitter(pollInterval)
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
+
+	// Get the latest tag from the list (lexicographically last)
+	latestTag := tags[len(tags)-1]
 
 	// If latest tag matches what we already deployed, we're done
 	if bundle.Status.LastAppliedTag == latestTag {

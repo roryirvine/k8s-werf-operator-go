@@ -251,28 +251,29 @@ func TestReconcile_JobRunning_StatusRemainsSyncing(t *testing.T) {
 		t.Errorf("expected phase Syncing after creation, got %s", bundle1.Status.Phase)
 	}
 
-	// Second reconcile - tag hasn't changed, so controller assumes job succeeded
-	// (This is acceptable because Kubernetes Jobs eventually complete or fail)
+	// Second reconcile - tag hasn't changed (ETag matches), so we get NotModifiedError
+	// With ETag caching, we don't get the actual tags back, just a notification that
+	// content hasn't changed. So we requeue and wait for the job to complete.
 	result2, err := reconciler.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatalf("second reconcile failed: %v", err)
 	}
 
-	// When tag matches LastAppliedTag, controller assumes deployment is done
-	// and updates status to Synced
+	// When we get NotModifiedError, we requeue after poll interval
+	// Status remains Syncing until job completes (checked in next reconcile with actual tags)
 	bundle2 := &werfv1alpha1.WerfBundle{}
 	if err := testk8sClient.Get(ctx, req.NamespacedName, bundle2); err != nil {
 		t.Fatalf("failed to get bundle: %v", err)
 	}
 
-	// After tag matches, status should be Synced
-	if bundle2.Status.Phase != werfv1alpha1.PhaseSynced {
-		t.Errorf("expected phase Synced when tag matches LastApplied, got %s", bundle2.Status.Phase)
+	// Status should still be Syncing (waiting for job to complete)
+	if bundle2.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing while job running, got %s", bundle2.Status.Phase)
 	}
 
-	// Should not requeue when synced
-	if result2.RequeueAfter != 0 {
-		t.Errorf("expected no requeue when synced, got %v", result2.RequeueAfter)
+	// Should requeue after poll interval when content hasn't changed
+	if result2.RequeueAfter == 0 {
+		t.Errorf("expected requeue after NotModifiedError, got none")
 	}
 }
 

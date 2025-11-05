@@ -11,6 +11,44 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
+// NotModifiedError indicates that the registry returned 304 Not Modified,
+// meaning the content hasn't changed since the last request (ETag matched).
+// This is not an error condition - it means the cached tag list is still valid.
+type NotModifiedError struct{}
+
+func (e *NotModifiedError) Error() string {
+	return "registry returned 304 Not Modified (cached response is valid)"
+}
+
+// NetworkError indicates a transient network failure (connectivity issue, timeout, etc).
+// These errors are retry-able and should trigger exponential backoff.
+type NetworkError struct {
+	Err error
+}
+
+func (e *NetworkError) Error() string {
+	return fmt.Sprintf("network error: %v", e.Err)
+}
+
+func (e *NetworkError) Unwrap() error {
+	return e.Err
+}
+
+// AuthError indicates an authentication or authorization failure.
+// These errors may be transient (registry temporarily down) or permanent (bad credentials).
+// Should be retried but with a shorter window before marking as Failed.
+type AuthError struct {
+	Err error
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf("authentication error: %v", e.Err)
+}
+
+func (e *AuthError) Unwrap() error {
+	return e.Err
+}
+
 // Client defines the interface for OCI registry operations.
 type Client interface {
 	// ListTags returns all tags available in the given repository.

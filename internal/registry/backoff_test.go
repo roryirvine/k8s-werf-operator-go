@@ -65,16 +65,16 @@ func TestCalculateBackoff(t *testing.T) {
 }
 
 func TestAddJitter(t *testing.T) {
-	// Test that jitter is within expected range (0-20%)
+	// Test that jitter is within expected range (±10%)
 	baseInterval := 15 * time.Minute
 
 	for i := 0; i < 100; i++ {
 		result := AddJitter(baseInterval)
 
-		// Minimum: baseInterval (0% jitter)
-		minExpected := baseInterval
-		// Maximum: baseInterval + 20% of baseInterval = baseInterval * 1.2
-		maxExpected := baseInterval + (baseInterval / 5)
+		// Minimum: baseInterval - 10% of baseInterval = baseInterval * 0.9
+		minExpected := baseInterval - (baseInterval / 10)
+		// Maximum: baseInterval + 10% of baseInterval = baseInterval * 1.1
+		maxExpected := baseInterval + (baseInterval / 10)
 
 		if result < minExpected || result > maxExpected {
 			t.Errorf("AddJitter(%v) = %v, want between %v and %v", baseInterval, result, minExpected, maxExpected)
@@ -85,8 +85,8 @@ func TestAddJitter(t *testing.T) {
 func TestAddJitterSmallInterval(t *testing.T) {
 	// Test with very small interval to ensure no rounding errors
 	baseInterval := 1 * time.Second
-	minExpected := baseInterval
-	maxExpected := baseInterval + (baseInterval / 5) // 1.2 seconds
+	minExpected := baseInterval - (baseInterval / 10) // 0.9 seconds
+	maxExpected := baseInterval + (baseInterval / 10) // 1.1 seconds
 
 	for i := 0; i < 50; i++ {
 		result := AddJitter(baseInterval)
@@ -120,5 +120,50 @@ func TestBackoffSequence(t *testing.T) {
 		if result != expected {
 			t.Errorf("Backoff sequence at failures=%d: got %v, want %v", failures, result, expected)
 		}
+	}
+}
+
+func TestAddJitter_Distribution(t *testing.T) {
+	// Verify that jitter is spread across the expected range, not clustered.
+	// With 100 samples, verify we have diversity and reasonable distribution.
+	baseInterval := 15 * time.Minute
+	minBound := baseInterval - (baseInterval / 10) // 90%
+	maxBound := baseInterval + (baseInterval / 10) // 110%
+
+	samples := make([]time.Duration, 100)
+	for i := 0; i < 100; i++ {
+		samples[i] = AddJitter(baseInterval)
+
+		// Verify each sample is within bounds
+		if samples[i] < minBound || samples[i] > maxBound {
+			t.Errorf("Sample %d: %v outside range [%v, %v]", i, samples[i], minBound, maxBound)
+		}
+	}
+
+	// Verify we have at least 10 distinct values (not clustered at edges)
+	distinctValues := make(map[time.Duration]bool)
+	for _, sample := range samples {
+		distinctValues[sample] = true
+	}
+
+	if len(distinctValues) < 10 {
+		t.Errorf("Expected at least 10 distinct values in 100 samples, got %d", len(distinctValues))
+	}
+
+	// Verify we have values spread across the range
+	// Count samples in lower half (< baseInterval) and upper half (>= baseInterval)
+	lowerHalf := 0
+	upperHalf := 0
+	for _, sample := range samples {
+		if sample < baseInterval {
+			lowerHalf++
+		} else {
+			upperHalf++
+		}
+	}
+
+	// Should be roughly balanced (at least 30% in each half for 100 samples)
+	if lowerHalf < 20 || upperHalf < 20 {
+		t.Errorf("Distribution not balanced: lower=%d, upper=%d (expected >20 each)", lowerHalf, upperHalf)
 	}
 }

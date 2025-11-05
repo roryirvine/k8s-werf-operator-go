@@ -32,21 +32,23 @@ func CalculateBackoff(consecutiveFailures int32) time.Duration {
 	return duration
 }
 
-// AddJitter returns the input duration with 0-20% random jitter added.
-// Prevents thundering herd when multiple bundles have same poll interval.
+// AddJitter returns the input duration with ±10% random jitter applied.
+// Prevents thundering herd when multiple bundles have same poll interval,
+// while avoiding drift toward longer intervals.
 // Examples with 15m interval:
 //   - without jitter: all bundles poll at :00 minutes
-//   - with jitter: polls spread over 12m-18m range
+//   - with jitter: polls spread over 13.5m-16.5m range (±10%)
 func AddJitter(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return interval
 	}
 
-	// Calculate 20% of the interval
-	jitterAmount := interval / 5
+	// Calculate 10% of the interval
+	jitterAmount := interval / 10
 
-	// Random 0 to jitterAmount
-	jitter := time.Duration(rand.Intn(int(jitterAmount)))
+	// Random -jitterAmount to +jitterAmount (±10%)
+	// rand.Intn(n) returns [0, n), so we need to shift to [-jitterAmount, +jitterAmount]
+	randomJitter := time.Duration(rand.Intn(int(2*jitterAmount)) - int(jitterAmount))
 
-	return interval + jitter
+	return interval + randomJitter
 }

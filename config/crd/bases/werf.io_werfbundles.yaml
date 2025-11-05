@@ -110,12 +110,32 @@ spec:
           status:
             description: WerfBundleStatus defines the observed state of WerfBundle.
             properties:
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures is the number of consecutive registry polling failures.
+                  Used to calculate exponential backoff. Reset to 0 on success.
+                  Marked Failed if ConsecutiveFailures >= 5.
+                format: int32
+                maximum: 5
+                minimum: 0
+                type: integer
               lastAppliedTag:
                 description: LastAppliedTag is the last successfully deployed tag.
+                type: string
+              lastETag:
+                description: |-
+                  LastETag is the ETag from the last successful registry response.
+                  Used for ETag-based caching to avoid re-downloading unchanged tag lists.
                 type: string
               lastErrorMessage:
                 description: LastErrorMessage is the last error encountered, or empty
                   string if no error.
+                type: string
+              lastErrorTime:
+                description: |-
+                  LastErrorTime is the timestamp of the last error encountered.
+                  Used to calculate backoff intervals for retries.
+                format: date-time
                 type: string
               lastSyncTime:
                 description: LastSyncTime is the timestamp of the last successful

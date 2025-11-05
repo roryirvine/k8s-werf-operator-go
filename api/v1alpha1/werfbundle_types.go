@@ -100,6 +100,24 @@ type WerfBundleStatus struct {
 	// LastErrorMessage is the last error encountered, or empty string if no error.
 	// +kubebuilder:validation:Optional
 	LastErrorMessage string `json:"lastErrorMessage,omitempty"`
+
+	// LastETag is the ETag from the last successful registry response.
+	// Used for ETag-based caching to avoid re-downloading unchanged tag lists.
+	// +kubebuilder:validation:Optional
+	LastETag string `json:"lastETag,omitempty"`
+
+	// ConsecutiveFailures is the number of consecutive registry polling failures.
+	// Used to calculate exponential backoff. Reset to 0 on success.
+	// Marked Failed if ConsecutiveFailures >= 5.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=5
+	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`
+
+	// LastErrorTime is the timestamp of the last error encountered.
+	// Used to calculate backoff intervals for retries.
+	// +kubebuilder:validation:Optional
+	LastErrorTime *metav1.Time `json:"lastErrorTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

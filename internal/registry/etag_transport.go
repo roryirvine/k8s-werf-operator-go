@@ -24,7 +24,10 @@ func newETagRoundTripper(base http.RoundTripper, lastETag string) *etagRoundTrip
 
 // RoundTrip implements http.RoundTripper.
 // Sets If-None-Match header if lastETag is set, and captures ETag from response.
+// Detects HTTP error status codes and returns appropriate error types.
 // Returns NotModifiedError if server returns 304 Not Modified.
+// Returns NetworkError for 5xx status codes.
+// Returns AuthError for 401/403 status codes.
 func (t *etagRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Set If-None-Match header if we have a cached ETag
 	if t.lastETag != "" {
@@ -41,10 +44,23 @@ func (t *etagRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 		t.capturedETag = etag
 	}
 
-	// If server returned 304 Not Modified, signal this via error
-	// (remote.List won't be able to parse empty body, so return error)
-	if resp.StatusCode == http.StatusNotModified {
+	// Detect HTTP error status codes and return appropriate error types
+	switch resp.StatusCode {
+	case http.StatusNotModified: // 304
+		// Content hasn't changed, signal with NotModifiedError
 		return nil, &NotModifiedError{}
+
+	case http.StatusUnauthorized, http.StatusForbidden: // 401, 403
+		// Authentication/authorization failure
+		return nil, &AuthError{Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))}
+
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout: // 502, 503, 504
+		// Transient server errors
+		return nil, &NetworkError{Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))}
+
+	case http.StatusInternalServerError: // 500
+		// Internal server error (might be transient)
+		return nil, &NetworkError{Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))}
 	}
 
 	return resp, nil

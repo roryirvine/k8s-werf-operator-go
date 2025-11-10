@@ -4,6 +4,7 @@ package converge
 import (
 	"fmt"
 	"hash/fnv"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -41,8 +42,19 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 
 	jobName := b.jobName(tag)
 
-	backoffLimit := int32(1)
-	ttlSecondsAfterFinished := int32(3600) // Keep finished jobs for 1 hour for debugging
+	// Job retry policy: don't retry within the job, controller handles retries
+	backoffLimit := int32(0)
+
+	// Calculate TTL for log retention: default 7 days
+	// TODO: Make this configurable via CRD in future phases
+	ttlSeconds := int32(7 * 24 * 60 * 60) // 7 days in seconds
+
+	// Apply resource limits with reasonable defaults
+	// TODO: Make these configurable via CRD in future phases
+	cpuRequest := mustParseResource("1")
+	cpuLimit := mustParseResource("1")
+	memoryRequest := mustParseResource("1Gi")
+	memoryLimit := mustParseResource("1Gi")
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -52,17 +64,21 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 				"app.kubernetes.io/name":       "werf-operator",
 				"app.kubernetes.io/instance":   b.werf.Name,
 				"app.kubernetes.io/managed-by": "werf-operator",
+				"werf.io/bundle":               b.werf.Name,
+				"werf.io/tag":                  tag,
 			},
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,
-			TTLSecondsAfterFinished: &ttlSecondsAfterFinished,
+			TTLSecondsAfterFinished: &ttlSeconds,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"app.kubernetes.io/name":       "werf-operator",
 						"app.kubernetes.io/instance":   b.werf.Name,
 						"app.kubernetes.io/managed-by": "werf-operator",
+						"werf.io/bundle":               b.werf.Name,
+						"werf.io/tag":                  tag,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -77,15 +93,16 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 								"--log-color=false",
 								fmt.Sprintf("%s:%s", b.werf.Spec.Registry.URL, tag),
 							},
-							// Hardcoded resource limits for Slice 1. Configurable via CRD in future slices.
+							// Resource limits prevent runaway werf processes
+							// Configurable via CRD in future phases
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    *mustParseResource("100m"),
-									corev1.ResourceMemory: *mustParseResource("256Mi"),
+									corev1.ResourceCPU:    *cpuRequest,
+									corev1.ResourceMemory: *memoryRequest,
 								},
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    *mustParseResource("2"),
-									corev1.ResourceMemory: *mustParseResource("2Gi"),
+									corev1.ResourceCPU:    *cpuLimit,
+									corev1.ResourceMemory: *memoryLimit,
 								},
 							},
 						},

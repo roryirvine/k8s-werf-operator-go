@@ -118,6 +118,24 @@ type WerfBundleStatus struct {
 	// Used to calculate backoff intervals for retries.
 	// +kubebuilder:validation:Optional
 	LastErrorTime *metav1.Time `json:"lastErrorTime,omitempty"`
+
+	// ActiveJobName is the name of the currently active job running werf converge.
+	// Set when a job is created, cleared when the job completes or fails.
+	// Used for deduplication to prevent multiple jobs for the same bundle version.
+	// +kubebuilder:validation:Optional
+	ActiveJobName string `json:"activeJobName,omitempty"`
+
+	// LastJobStatus is the status of the most recent job (Succeeded, Failed, Running).
+	// Provides quick visibility into the last deployment attempt without listing jobs separately.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Succeeded;Failed;Running
+	LastJobStatus string `json:"lastJobStatus,omitempty"`
+
+	// LastJobLogs are the captured logs from the most recent job (tail of output).
+	// Limited to ~5KB to fit in Status; larger logs are stored in a ConfigMap instead.
+	// Provides debugging visibility without requiring external log aggregation.
+	// +kubebuilder:validation:Optional
+	LastJobLogs string `json:"lastJobLogs,omitempty"`
 }
 
 // +kubebuilder:object:root=true

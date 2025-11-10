@@ -201,13 +201,13 @@ func TestBuilder_Build_ResourceLimits(t *testing.T) {
 	}
 
 	cpuReq := resources.Requests[corev1.ResourceCPU]
-	if cpuReq.String() != "100m" {
-		t.Errorf("CPU request: got %s, want 100m", cpuReq.String())
+	if cpuReq.String() != "1" {
+		t.Errorf("CPU request: got %s, want 1", cpuReq.String())
 	}
 
 	memReq := resources.Requests[corev1.ResourceMemory]
-	if memReq.String() != "256Mi" {
-		t.Errorf("Memory request: got %s, want 256Mi", memReq.String())
+	if memReq.String() != "1Gi" {
+		t.Errorf("Memory request: got %s, want 1Gi", memReq.String())
 	}
 
 	// Verify limits
@@ -216,13 +216,13 @@ func TestBuilder_Build_ResourceLimits(t *testing.T) {
 	}
 
 	cpuLim := resources.Limits[corev1.ResourceCPU]
-	if cpuLim.String() != "2" {
-		t.Errorf("CPU limit: got %s, want 2", cpuLim.String())
+	if cpuLim.String() != "1" {
+		t.Errorf("CPU limit: got %s, want 1", cpuLim.String())
 	}
 
 	memLim := resources.Limits[corev1.ResourceMemory]
-	if memLim.String() != "2Gi" {
-		t.Errorf("Memory limit: got %s, want 2Gi", memLim.String())
+	if memLim.String() != "1Gi" {
+		t.Errorf("Memory limit: got %s, want 1Gi", memLim.String())
 	}
 }
 
@@ -246,12 +246,15 @@ func TestBuilder_Build_JobSpec(t *testing.T) {
 	job, _ := builder.Build("v1.0.0")
 
 	// Verify job spec
-	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit != 1 {
-		t.Error("expected backoff limit of 1")
+	// Backoff limit of 0 means job doesn't retry; controller handles retries
+	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit != 0 {
+		t.Error("expected backoff limit of 0")
 	}
 
-	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 3600 {
-		t.Error("expected TTL of 3600 seconds")
+	// TTL should be 7 days for log retention
+	expectedTTL := int32(7 * 24 * 60 * 60) // 604800 seconds
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != expectedTTL {
+		t.Errorf("expected TTL of %d seconds, got %d", expectedTTL, *job.Spec.TTLSecondsAfterFinished)
 	}
 
 	// Verify pod spec

@@ -4,7 +4,6 @@ package converge
 import (
 	"fmt"
 	"hash/fnv"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"

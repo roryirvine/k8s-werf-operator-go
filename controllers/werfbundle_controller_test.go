@@ -8,6 +8,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -665,5 +666,265 @@ func TestE2E_CreateBundle_CreatesJob(t *testing.T) {
 
 	if !jobFound {
 		t.Error("expected job owned by bundle to be created")
+	}
+}
+
+func TestReconcile_ActiveJob_Deduplicates(t *testing.T) {
+	ctx := context.Background()
+
+	// Create ServiceAccount
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	// Create WerfBundle with a manually set ActiveJobName to simulate existing job
+	bundleName := fmt.Sprintf("test-dedup-%d", time.Now().UnixNano())
+	jobName := "test-dedup-xyz"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/dedup",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	// Set status with active job (must use Status().Update())
+	// Note: We set LastAppliedTag to empty to simulate a fresh start where registry
+	// returns v1.0.0 as a new tag that needs deploying, but we already have a job running
+	bundle.Status.Phase = werfv1alpha1.PhaseSyncing
+	bundle.Status.LastAppliedTag = ""
+	bundle.Status.LastJobStatus = "Running"
+	bundle.Status.ActiveJobName = jobName
+	if err := testk8sClient.Status().Update(ctx, bundle); err != nil {
+		t.Fatalf("failed to update bundle status: %v", err)
+	}
+
+	// Create a Job that matches the ActiveJobName
+	existingJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-dedup-xyz",
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: "werf.io/v1alpha1",
+					Kind:       "WerfBundle",
+					Name:       bundleName,
+					UID:        bundle.UID,
+				},
+			},
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "werf",
+							Image: "ghcr.io/werf/werf:latest",
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+				},
+			},
+		},
+		Status: batchv1.JobStatus{
+			// Job is still running - not completed
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, existingJob); err != nil {
+		t.Fatalf("failed to create existing Job: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	// Set registry to only have the current tag (v1.0.0)
+	// This simulates reconcile being called again while job is running for the same tag
+	fakeReg.SetTags("ghcr.io/test/dedup", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// First reconcile: should create a new job (no active job yet)
+	// Note: the test setup manually sets ActiveJobName to simulate ongoing job
+
+	// Verify only 1 job exists initially (the one we manually created)
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs after setup: %v", err)
+	}
+
+	bundleJobCountBefore := 0
+	for _, job := range jobs.Items {
+		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == bundleName {
+			bundleJobCountBefore++
+		}
+	}
+
+	if bundleJobCountBefore != 1 {
+		t.Errorf("expected 1 job after setup, got %d", bundleJobCountBefore)
+	}
+
+	// Reconcile again with same tag: should NOT create new job (dedup via ActiveJobName)
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Should requeue to monitor the existing job
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue to monitor existing job")
+	}
+
+	// Verify still only 1 job exists (no duplicate created)
+	jobs = &batchv1.JobList{}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs after reconcile: %v", err)
+	}
+
+	bundleJobCount := 0
+	for _, job := range jobs.Items {
+		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == bundleName {
+			bundleJobCount++
+		}
+	}
+
+	if bundleJobCount != 1 {
+		t.Errorf("expected 1 job (deduplication), got %d", bundleJobCount)
+	}
+
+	// Verify bundle status: ActiveJobName should still be the existing one
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get updated bundle: %v", err)
+	}
+
+	// ActiveJobName should remain unchanged (monitored, not recreated)
+	if updatedBundle.Status.ActiveJobName != jobName {
+		t.Errorf("expected ActiveJobName=%s, got %s", jobName, updatedBundle.Status.ActiveJobName)
+	}
+
+	if updatedBundle.Status.LastJobStatus != "Running" {
+		t.Errorf("expected LastJobStatus=Running, got %s", updatedBundle.Status.LastJobStatus)
+	}
+}
+
+func TestReconcile_ActiveJobDisappears_CreatesNewJob(t *testing.T) {
+	ctx := context.Background()
+
+	// Create ServiceAccount
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	// Create WerfBundle with an active job that no longer exists
+	bundleName := fmt.Sprintf("test-lost-job-%d", time.Now().UnixNano())
+	oldJobName := "test-lost-job-xyz"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/lostjob",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	// Set status with a non-existent active job
+	bundle.Status.Phase = werfv1alpha1.PhaseSyncing
+	bundle.Status.LastAppliedTag = ""
+	bundle.Status.LastJobStatus = "Running"
+	bundle.Status.ActiveJobName = oldJobName
+	if err := testk8sClient.Status().Update(ctx, bundle); err != nil {
+		t.Fatalf("failed to update bundle status: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/lostjob", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// Reconcile: should detect that old job is gone, clear it, and create a new one
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Should requeue (new job was created)
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after new job creation")
+	}
+
+	// Verify bundle has new ActiveJobName (not the old one that disappeared)
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get updated bundle: %v", err)
+	}
+
+	if updatedBundle.Status.ActiveJobName == oldJobName {
+		t.Errorf("expected ActiveJobName to be cleared and reset, got old value %s", oldJobName)
+	}
+
+	if updatedBundle.Status.ActiveJobName == "" {
+		t.Error("expected new ActiveJobName to be set")
+	}
+
+	// Verify a job was created
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	if len(jobs.Items) == 0 {
+		t.Error("expected a new job to be created")
 	}
 }

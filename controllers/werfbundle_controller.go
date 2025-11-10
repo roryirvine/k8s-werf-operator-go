@@ -255,6 +255,7 @@ func (r *WerfBundleReconciler) handleRegistryError(
 
 // ensureJobExists builds a Job for the given tag, creates it if it doesn't exist,
 // and monitors its status for completion.
+// Implements deduplication by tracking the active job name in Status.
 // Returns a requeue result if the Job is still running.
 // Returns nil, nil if the Job succeeds or fails.
 func (r *WerfBundleReconciler) ensureJobExists(
@@ -265,6 +266,30 @@ func (r *WerfBundleReconciler) ensureJobExists(
 	log := ctrl.LoggerFrom(ctx)
 
 	log.Info("new tag found, ensuring converge job exists", "tag", latestTag)
+
+	// Check if we already have an active job running (deduplication)
+	if bundle.Status.ActiveJobName != "" {
+		jobKey := types.NamespacedName{
+			Name:      bundle.Status.ActiveJobName,
+			Namespace: bundle.Namespace,
+		}
+		activeJob := &batchv1.Job{}
+		if err := r.Get(ctx, jobKey, activeJob); err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "failed to fetch active job", "jobName", bundle.Status.ActiveJobName)
+				return ctrl.Result{}, err
+			}
+			// Active job not found, clear it from status
+			log.Info("active job no longer exists, clearing from status", "jobName", bundle.Status.ActiveJobName)
+			bundle.Status.ActiveJobName = ""
+		} else {
+			// Active job still exists, check its status
+			log.Info("active job exists, monitoring it", "jobName", activeJob.Name)
+			return r.monitorJobCompletion(ctx, bundle, activeJob, latestTag)
+		}
+	}
+
+	// No active job, update status to Syncing and build new job spec
 	if err := r.updateStatusSyncing(ctx, bundle, latestTag); err != nil {
 		log.Error(err, "failed to update status to Syncing")
 		return ctrl.Result{}, err
@@ -282,36 +307,47 @@ func (r *WerfBundleReconciler) ensureJobExists(
 		return ctrl.Result{}, nil
 	}
 
-	// Check if Job already exists before creating
-	jobKey := types.NamespacedName{
-		Name:      jobSpec.Name,
-		Namespace: jobSpec.Namespace,
-	}
-	existingJob := &batchv1.Job{}
-	jobExists := r.Get(ctx, jobKey, existingJob) == nil
-
-	if !jobExists {
-		// Job doesn't exist, create it
-		if err := r.Create(ctx, jobSpec); err != nil {
-			log.Error(err, "failed to create Job")
-			if err := r.updateStatusFailed(ctx, bundle,
-				fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
-				log.Error(err, "failed to update status after job creation failure")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
+	// Create the Job and track it in status
+	if err := r.Create(ctx, jobSpec); err != nil {
+		log.Error(err, "failed to create Job")
+		if err := r.updateStatusFailed(ctx, bundle,
+			fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
+			log.Error(err, "failed to update status after job creation failure")
+			return ctrl.Result{}, err
 		}
-		log.Info("Job created successfully", "jobName", jobSpec.Name)
-		// Job just created, give it time to start
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		return ctrl.Result{}, nil
 	}
 
-	// Job exists, monitor it for completion
-	log.Info("Job already exists, monitoring status", "jobName", existingJob.Name)
+	log.Info("Job created successfully", "jobName", jobSpec.Name)
+
+	// Track active job in status for deduplication
+	bundle.Status.ActiveJobName = jobSpec.Name
+	bundle.Status.LastJobStatus = "Running"
+	if err := r.Status().Update(ctx, bundle); err != nil {
+		log.Error(err, "failed to update status with active job name")
+		return ctrl.Result{}, err
+	}
+
+	// Job just created, give it time to start
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// monitorJobCompletion checks the status of a running job and updates bundle status accordingly.
+// Returns a requeue result if the job is still running.
+// Returns nil, nil if the job completes (success or failure).
+func (r *WerfBundleReconciler) monitorJobCompletion(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	job *batchv1.Job,
+	latestTag string,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
 
 	// Check Job status
-	if existingJob.Status.Succeeded > 0 {
-		log.Info("Job succeeded, updating status to Synced", "tag", latestTag)
+	if job.Status.Succeeded > 0 {
+		log.Info("Job succeeded, updating status to Synced", "tag", latestTag, "jobName", job.Name)
+		bundle.Status.LastJobStatus = "Succeeded"
+		bundle.Status.ActiveJobName = ""
 		if err := r.updateStatusSynced(ctx, bundle, latestTag); err != nil {
 			log.Error(err, "failed to update status after job success")
 			return ctrl.Result{}, err
@@ -319,8 +355,10 @@ func (r *WerfBundleReconciler) ensureJobExists(
 		return ctrl.Result{}, nil
 	}
 
-	if existingJob.Status.Failed > 0 {
-		log.Info("Job failed", "jobName", existingJob.Name)
+	if job.Status.Failed > 0 {
+		log.Info("Job failed", "jobName", job.Name)
+		bundle.Status.LastJobStatus = "Failed"
+		bundle.Status.ActiveJobName = ""
 		if err := r.updateStatusFailed(ctx, bundle,
 			"Job failed, see job logs for details"); err != nil {
 			log.Error(err, "failed to update status after job failure")
@@ -330,7 +368,7 @@ func (r *WerfBundleReconciler) ensureJobExists(
 	}
 
 	// Job is still running, requeue to check again
-	log.Info("Job is still running, will recheck on next sync", "jobName", existingJob.Name)
+	log.Info("Job is still running, will recheck on next sync", "jobName", job.Name)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 

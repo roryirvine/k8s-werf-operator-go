@@ -88,6 +88,22 @@ type ConvergeConfig struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	ServiceAccountName string `json:"serviceAccountName"`
+
+	// ResourceLimits specifies CPU and memory limits for werf converge jobs.
+	// If not specified, defaults are used: 1 CPU and 1Gi memory.
+	// +kubebuilder:validation:Optional
+	ResourceLimits *ResourceLimitsConfig `json:"resourceLimits,omitempty"`
+}
+
+// ResourceLimitsConfig specifies CPU and memory limits for jobs.
+type ResourceLimitsConfig struct {
+	// CPU is the CPU limit as a string (e.g., "500m", "2", "1.5").
+	// +kubebuilder:validation:Optional
+	CPU string `json:"cpu,omitempty"`
+
+	// Memory is the memory limit as a string (e.g., "512Mi", "1Gi", "2G").
+	// +kubebuilder:validation:Optional
+	Memory string `json:"memory,omitempty"`
 }
 
 // WerfBundleStatus defines the observed state of WerfBundle.

@@ -12,6 +12,8 @@ import (
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 )
 
+const defaultMemory = "1Gi"
+
 var testScheme = func() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -206,7 +208,7 @@ func TestBuilder_Build_ResourceLimits(t *testing.T) {
 	}
 
 	memReq := resources.Requests[corev1.ResourceMemory]
-	if memReq.String() != "1Gi" {
+	if memReq.String() != defaultMemory {
 		t.Errorf("Memory request: got %s, want 1Gi", memReq.String())
 	}
 
@@ -221,7 +223,7 @@ func TestBuilder_Build_ResourceLimits(t *testing.T) {
 	}
 
 	memLim := resources.Limits[corev1.ResourceMemory]
-	if memLim.String() != "1Gi" {
+	if memLim.String() != defaultMemory {
 		t.Errorf("Memory limit: got %s, want 1Gi", memLim.String())
 	}
 }
@@ -269,5 +271,141 @@ func TestBuilder_Build_NilBundle(t *testing.T) {
 
 	if err == nil {
 		t.Error("expected error for nil bundle, got nil")
+	}
+}
+
+func TestBuilder_Build_CustomResourceLimits(t *testing.T) {
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "custom-resources",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				ResourceLimits: &werfv1alpha1.ResourceLimitsConfig{
+					CPU:    "2",
+					Memory: "2Gi",
+				},
+			},
+		},
+	}
+
+	builder := NewBuilder(bundle).WithScheme(testScheme)
+	job, err := builder.Build("v1.0.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	container := job.Spec.Template.Spec.Containers[0]
+	resources := container.Resources
+
+	// Verify custom CPU limit is used
+	cpuLim := resources.Limits[corev1.ResourceCPU]
+	if cpuLim.String() != "2" {
+		t.Errorf("CPU limit: got %s, want 2", cpuLim.String())
+	}
+
+	// Verify custom memory limit is used
+	memLim := resources.Limits[corev1.ResourceMemory]
+	if memLim.String() != "2Gi" {
+		t.Errorf("Memory limit: got %s, want 2Gi", memLim.String())
+	}
+
+	// Verify requests match limits
+	cpuReq := resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "2" {
+		t.Errorf("CPU request: got %s, want 2", cpuReq.String())
+	}
+
+	memReq := resources.Requests[corev1.ResourceMemory]
+	if memReq.String() != "2Gi" {
+		t.Errorf("Memory request: got %s, want 2Gi", memReq.String())
+	}
+}
+
+func TestBuilder_Build_PartialResourceLimits(t *testing.T) {
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "partial-resources",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				ResourceLimits: &werfv1alpha1.ResourceLimitsConfig{
+					CPU: "500m",
+					// Memory not specified, should use default
+				},
+			},
+		},
+	}
+
+	builder := NewBuilder(bundle).WithScheme(testScheme)
+	job, err := builder.Build("v1.0.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	container := job.Spec.Template.Spec.Containers[0]
+	resources := container.Resources
+
+	// Verify custom CPU limit is used
+	cpuLim := resources.Limits[corev1.ResourceCPU]
+	if cpuLim.String() != "500m" {
+		t.Errorf("CPU limit: got %s, want 500m", cpuLim.String())
+	}
+
+	// Verify default memory limit is used
+	memLim := resources.Limits[corev1.ResourceMemory]
+	if memLim.String() != defaultMemory {
+		t.Errorf("Memory limit: got %s, want 1Gi (default)", memLim.String())
+	}
+}
+
+func TestBuilder_Build_DefaultResourceLimits(t *testing.T) {
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-resources",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				// ResourceLimits not specified, should use defaults
+			},
+		},
+	}
+
+	builder := NewBuilder(bundle).WithScheme(testScheme)
+	job, err := builder.Build("v1.0.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	container := job.Spec.Template.Spec.Containers[0]
+	resources := container.Resources
+
+	// Verify default limits are applied
+	cpuLim := resources.Limits[corev1.ResourceCPU]
+	if cpuLim.String() != "1" {
+		t.Errorf("CPU limit: got %s, want 1 (default)", cpuLim.String())
+	}
+
+	memLim := resources.Limits[corev1.ResourceMemory]
+	if memLim.String() != defaultMemory {
+		t.Errorf("Memory limit: got %s, want 1Gi (default)", memLim.String())
 	}
 }

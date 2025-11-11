@@ -48,12 +48,11 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 	// TODO: Make this configurable via CRD in future phases
 	ttlSeconds := int32(7 * 24 * 60 * 60) // 7 days in seconds
 
-	// Apply resource limits with reasonable defaults
-	// TODO: Make these configurable via CRD in future phases
-	cpuRequest := mustParseResource("1")
-	cpuLimit := mustParseResource("1")
-	memoryRequest := mustParseResource("1Gi")
-	memoryLimit := mustParseResource("1Gi")
+	// Apply resource limits from spec or use defaults
+	cpuLimit := b.getResourceLimit("cpu")
+	memoryLimit := b.getResourceLimit("memory")
+	cpuRequest := b.getResourceLimit("cpu")       // Requests match limits
+	memoryRequest := b.getResourceLimit("memory") // Requests match limits
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -143,6 +142,38 @@ func (b *Builder) jobName(tag string) string {
 
 	// Last resort: just use hash
 	return fmt.Sprintf("werf-%s", hash)
+}
+
+// getResourceLimit returns the configured resource limit or a sensible default.
+// resourceType should be "cpu" or "memory".
+func (b *Builder) getResourceLimit(resourceType string) *resource.Quantity {
+	var value string
+
+	// Check if custom limits are specified
+	if b.werf.Spec.Converge.ResourceLimits != nil {
+		switch resourceType {
+		case "cpu":
+			if b.werf.Spec.Converge.ResourceLimits.CPU != "" {
+				value = b.werf.Spec.Converge.ResourceLimits.CPU
+			}
+		case "memory":
+			if b.werf.Spec.Converge.ResourceLimits.Memory != "" {
+				value = b.werf.Spec.Converge.ResourceLimits.Memory
+			}
+		}
+	}
+
+	// Apply defaults if not specified
+	if value == "" {
+		switch resourceType {
+		case "cpu":
+			value = "1"
+		case "memory":
+			value = "1Gi"
+		}
+	}
+
+	return mustParseResource(value)
 }
 
 // mustParseResource parses a resource string and panics on error.

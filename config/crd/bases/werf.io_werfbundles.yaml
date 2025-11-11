@@ -60,6 +60,20 @@ spec:
                 description: Converge contains configuration for deploying the bundle
                   with werf converge.
                 properties:
+                  resourceLimits:
+                    description: |-
+                      ResourceLimits specifies CPU and memory limits for werf converge jobs.
+                      If not specified, defaults are used: 1 CPU and 1Gi memory.
+                    properties:
+                      cpu:
+                        description: CPU is the CPU limit as a string (e.g., "500m",
+                          "2", "1.5").
+                        type: string
+                      memory:
+                        description: Memory is the memory limit as a string (e.g.,
+                          "512Mi", "1Gi", "2G").
+                        type: string
+                    type: object
                   serviceAccountName:
                     description: |-
                       ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.

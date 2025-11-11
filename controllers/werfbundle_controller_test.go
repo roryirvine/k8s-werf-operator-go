@@ -1101,3 +1101,85 @@ func TestStoreJobLogs_ConfigMapOwnerReference(t *testing.T) {
 		t.Error("expected ConfigMap to have owner reference to WerfBundle")
 	}
 }
+
+func TestReconcile_CustomResourceLimits_BundleAccepted(t *testing.T) {
+	ctx := context.Background()
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-bundle-with-resource-limits",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+				ResourceLimits: &werfv1alpha1.ResourceLimitsConfig{
+					CPU:    "500m",
+					Memory: "512Mi",
+				},
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create bundle: %v", err)
+	}
+
+	// Verify the bundle was created with resource limits
+	fetchedBundle := &werfv1alpha1.WerfBundle{}
+	bundleKey := types.NamespacedName{
+		Name:      "test-bundle-with-resource-limits",
+		Namespace: "default",
+	}
+	if err := testk8sClient.Get(ctx, bundleKey, fetchedBundle); err != nil {
+		t.Fatalf("failed to fetch bundle after creation: %v", err)
+	}
+	if fetchedBundle.Spec.Converge.ResourceLimits == nil {
+		t.Fatal("bundle ResourceLimits should not be nil")
+	}
+	if fetchedBundle.Spec.Converge.ResourceLimits.CPU != "500m" {
+		t.Errorf("CPU: got %s, want 500m", fetchedBundle.Spec.Converge.ResourceLimits.CPU)
+	}
+	if fetchedBundle.Spec.Converge.ResourceLimits.Memory != "512Mi" {
+		t.Errorf("Memory: got %s, want 512Mi", fetchedBundle.Spec.Converge.ResourceLimits.Memory)
+	}
+
+	// Verify reconciliation accepts bundles with custom resource limits
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "test-bundle-with-resource-limits",
+			Namespace: "default",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Should requeue to wait for job to complete
+	if result.RequeueAfter == 0 {
+		t.Errorf("expected requeue after, got none")
+	}
+}

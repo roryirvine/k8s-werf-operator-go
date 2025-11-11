@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -58,6 +59,7 @@ type WerfBundleReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	RegistryClient registry.Client
+	Clientset      kubernetes.Interface
 }
 
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch;update;patch
@@ -349,6 +351,21 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 		log.Info("Job succeeded, updating status to Synced", "tag", latestTag, "jobName", job.Name)
 		bundle.Status.LastJobStatus = werfv1alpha1.JobStatusSucceeded
 		bundle.Status.ActiveJobName = ""
+
+		// Capture job logs for debugging
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		if err != nil {
+			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
+		} else {
+			// Store logs in status or ConfigMap
+			statusLogs, err := r.storeJobLogs(ctx, bundle, job.Name, jobLogs)
+			if err != nil {
+				log.Error(err, "failed to store job logs, continuing without logs", "jobName", job.Name)
+			} else {
+				bundle.Status.LastJobLogs = statusLogs
+			}
+		}
+
 		if err := r.updateStatusSynced(ctx, bundle, latestTag); err != nil {
 			log.Error(err, "failed to update status after job success")
 			return ctrl.Result{}, err
@@ -360,6 +377,21 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 		log.Info("Job failed", "jobName", job.Name)
 		bundle.Status.LastJobStatus = werfv1alpha1.JobStatusFailed
 		bundle.Status.ActiveJobName = ""
+
+		// Capture job logs for debugging
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		if err != nil {
+			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
+		} else {
+			// Store logs in status or ConfigMap
+			statusLogs, err := r.storeJobLogs(ctx, bundle, job.Name, jobLogs)
+			if err != nil {
+				log.Error(err, "failed to store job logs, continuing without logs", "jobName", job.Name)
+			} else {
+				bundle.Status.LastJobLogs = statusLogs
+			}
+		}
+
 		if err := r.updateStatusFailed(ctx, bundle,
 			"Job failed, see job logs for details"); err != nil {
 			log.Error(err, "failed to update status after job failure")
@@ -419,8 +451,68 @@ func (r *WerfBundleReconciler) updateStatusFailed(
 	return r.Status().Update(ctx, bundle)
 }
 
+// storeJobLogs stores job logs in bundle status or ConfigMap if too large.
+// Returns logs suitable for status field (up to 5KB) and whether full logs were stored in ConfigMap.
+func (r *WerfBundleReconciler) storeJobLogs(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	jobName string,
+	logs string,
+) (statusLogs string, err error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// If logs fit in status field (5KB), store directly
+	if len(logs) <= 5120 {
+		return logs, nil
+	}
+
+	// Logs are too large for status field, store in ConfigMap
+	configMapName := fmt.Sprintf("%s-logs", jobName)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: bundle.Namespace,
+		},
+		Data: map[string]string{
+			"output": logs,
+		},
+	}
+
+	// Set owner reference for automatic cleanup
+	if err := controllerutil.SetControllerReference(bundle, cm, r.Scheme); err != nil {
+		log.Error(err, "failed to set controller reference on log ConfigMap")
+		return "", err
+	}
+
+	// Create or update the ConfigMap
+	if err := r.Client.Create(ctx, cm); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// ConfigMap exists, update it
+			if err := r.Client.Update(ctx, cm); err != nil {
+				log.Error(err, "failed to update log ConfigMap", "configMap", configMapName)
+				return "", err
+			}
+		} else {
+			log.Error(err, "failed to create log ConfigMap", "configMap", configMapName)
+			return "", err
+		}
+	}
+
+	// Return a reference to the ConfigMap for the status field
+	return fmt.Sprintf("See ConfigMap %s for full logs", configMapName), nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *WerfBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Initialize Kubernetes clientset for pod log access
+	if r.Clientset == nil {
+		clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			return fmt.Errorf("failed to create Kubernetes clientset: %w", err)
+		}
+		r.Clientset = clientset
+	}
+
 	// Ignore status subresource updates to avoid infinite reconciliation
 	pred := predicate.GenerationChangedPredicate{}
 

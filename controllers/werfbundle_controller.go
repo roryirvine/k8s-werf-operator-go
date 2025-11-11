@@ -485,10 +485,10 @@ func (r *WerfBundleReconciler) storeJobLogs(
 	}
 
 	// Create or update the ConfigMap
-	if err := r.Client.Create(ctx, cm); err != nil {
+	if err := r.Create(ctx, cm); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// ConfigMap exists, update it
-			if err := r.Client.Update(ctx, cm); err != nil {
+			if err := r.Update(ctx, cm); err != nil {
 				log.Error(err, "failed to update log ConfigMap", "configMap", configMapName)
 				return "", err
 			}

@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -926,5 +927,177 @@ func TestReconcile_ActiveJobDisappears_CreatesNewJob(t *testing.T) {
 
 	if len(jobs.Items) == 0 {
 		t.Error("expected a new job to be created")
+	}
+}
+
+func TestStoreJobLogs_SmallLogs_StoredInStatus(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-logs",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/logs",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create bundle: %v", err)
+	}
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: NewFakeRegistry(),
+	}
+
+	// Test with small logs (< 5KB)
+	smallLogs := "This is a small log output\nLine 2\nLine 3"
+	statusLogs, err := reconciler.storeJobLogs(ctx, bundle, "test-job", smallLogs)
+	if err != nil {
+		t.Fatalf("failed to store logs: %v", err)
+	}
+
+	// Small logs should be returned as-is
+	if statusLogs != smallLogs {
+		t.Errorf("expected logs to be returned as-is, got %s", statusLogs)
+	}
+
+	// Verify no ConfigMap was created
+	cms := &corev1.ConfigMapList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, cms, opts); err != nil {
+		t.Fatalf("failed to list ConfigMaps: %v", err)
+	}
+
+	if len(cms.Items) > 0 {
+		t.Errorf("expected no ConfigMap for small logs, got %d", len(cms.Items))
+	}
+}
+
+func TestStoreJobLogs_LargeLogs_StoredInConfigMap(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-large-logs",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/large-logs",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create bundle: %v", err)
+	}
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: NewFakeRegistry(),
+	}
+
+	// Create logs larger than 5KB
+	largeLogs := strings.Repeat("a", 6000)
+
+	statusLogs, err := reconciler.storeJobLogs(ctx, bundle, "test-large-job", largeLogs)
+	if err != nil {
+		t.Fatalf("failed to store logs: %v", err)
+	}
+
+	// Status logs should reference ConfigMap
+	if !strings.Contains(statusLogs, "ConfigMap") {
+		t.Errorf("expected status logs to reference ConfigMap, got %s", statusLogs)
+	}
+
+	// Verify ConfigMap was created
+	cms := &corev1.ConfigMapList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, cms, opts); err != nil {
+		t.Fatalf("failed to list ConfigMaps: %v", err)
+	}
+
+	if len(cms.Items) == 0 {
+		t.Error("expected ConfigMap to be created for large logs")
+	}
+
+	// Verify ConfigMap contains the logs
+	if len(cms.Items) > 0 {
+		cm := cms.Items[0]
+		if output, exists := cm.Data["output"]; !exists {
+			t.Error("expected ConfigMap to have 'output' key")
+		} else if len(output) != 6000 {
+			t.Errorf("expected full logs in ConfigMap, got %d bytes", len(output))
+		}
+	}
+}
+
+func TestStoreJobLogs_ConfigMapOwnerReference(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-owner-ref",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/owner",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create bundle: %v", err)
+	}
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: NewFakeRegistry(),
+	}
+
+	// Create logs larger than 5KB
+	largeLogs := strings.Repeat("b", 6000)
+
+	_, err := reconciler.storeJobLogs(ctx, bundle, "test-owner-job", largeLogs)
+	if err != nil {
+		t.Fatalf("failed to store logs: %v", err)
+	}
+
+	// Verify ConfigMap has owner reference
+	cm := &corev1.ConfigMap{}
+	cmKey := types.NamespacedName{Name: "test-owner-job-logs", Namespace: "default"}
+	if err := testk8sClient.Get(ctx, cmKey, cm); err != nil {
+		t.Fatalf("failed to get ConfigMap: %v", err)
+	}
+
+	// Check for owner reference
+	hasOwnerRef := false
+	for _, ref := range cm.OwnerReferences {
+		if ref.Kind == "WerfBundle" && ref.Name == "test-owner-ref" {
+			hasOwnerRef = true
+			break
+		}
+	}
+
+	if !hasOwnerRef {
+		t.Error("expected ConfigMap to have owner reference to WerfBundle")
 	}
 }

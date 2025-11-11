@@ -74,7 +74,9 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, pod corev1.
 	if err != nil {
 		return "", fmt.Errorf("failed to get logs from pod %s/%s: %w", namespace, pod.Name, err)
 	}
-	defer stream.Close()
+	defer func() {
+		_ = stream.Close() // Ignore close errors; we've already read the content
+	}()
 
 	// Read logs into a buffer
 	var buf bytes.Buffer

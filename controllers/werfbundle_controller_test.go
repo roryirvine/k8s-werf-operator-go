@@ -711,7 +711,7 @@ func TestReconcile_ActiveJob_Deduplicates(t *testing.T) {
 	// returns v1.0.0 as a new tag that needs deploying, but we already have a job running
 	bundle.Status.Phase = werfv1alpha1.PhaseSyncing
 	bundle.Status.LastAppliedTag = ""
-	bundle.Status.LastJobStatus = "Running"
+	bundle.Status.LastJobStatus = werfv1alpha1.JobStatusRunning
 	bundle.Status.ActiveJobName = jobName
 	if err := testk8sClient.Status().Update(ctx, bundle); err != nil {
 		t.Fatalf("failed to update bundle status: %v", err)
@@ -828,8 +828,8 @@ func TestReconcile_ActiveJob_Deduplicates(t *testing.T) {
 		t.Errorf("expected ActiveJobName=%s, got %s", jobName, updatedBundle.Status.ActiveJobName)
 	}
 
-	if updatedBundle.Status.LastJobStatus != "Running" {
-		t.Errorf("expected LastJobStatus=Running, got %s", updatedBundle.Status.LastJobStatus)
+	if updatedBundle.Status.LastJobStatus != werfv1alpha1.JobStatusRunning {
+		t.Errorf("expected LastJobStatus=%s, got %s", werfv1alpha1.JobStatusRunning, updatedBundle.Status.LastJobStatus)
 	}
 }
 
@@ -873,7 +873,7 @@ func TestReconcile_ActiveJobDisappears_CreatesNewJob(t *testing.T) {
 	// Set status with a non-existent active job
 	bundle.Status.Phase = werfv1alpha1.PhaseSyncing
 	bundle.Status.LastAppliedTag = ""
-	bundle.Status.LastJobStatus = "Running"
+	bundle.Status.LastJobStatus = werfv1alpha1.JobStatusRunning
 	bundle.Status.ActiveJobName = oldJobName
 	if err := testk8sClient.Status().Update(ctx, bundle); err != nil {
 		t.Fatalf("failed to update bundle status: %v", err)

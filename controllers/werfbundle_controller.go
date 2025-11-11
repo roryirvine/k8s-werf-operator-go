@@ -279,12 +279,13 @@ func (r *WerfBundleReconciler) ensureJobExists(
 				log.Error(err, "failed to fetch active job", "jobName", bundle.Status.ActiveJobName)
 				return ctrl.Result{}, err
 			}
-			// Active job not found, clear it from status
+			// Active job not found, clear it from status and proceed to create new one
 			log.Info("active job no longer exists, clearing from status", "jobName", bundle.Status.ActiveJobName)
 			bundle.Status.ActiveJobName = ""
 		} else {
-			// Active job still exists, check its status
-			log.Info("active job exists, monitoring it", "jobName", activeJob.Name)
+			// Active job still exists, just monitor it instead of creating a new one
+			log.Info("active job already running, deferring new tag until job completes",
+				"jobName", activeJob.Name, "newTag", latestTag)
 			return r.monitorJobCompletion(ctx, bundle, activeJob, latestTag)
 		}
 	}
@@ -322,7 +323,7 @@ func (r *WerfBundleReconciler) ensureJobExists(
 
 	// Track active job in status for deduplication
 	bundle.Status.ActiveJobName = jobSpec.Name
-	bundle.Status.LastJobStatus = "Running"
+	bundle.Status.LastJobStatus = werfv1alpha1.JobStatusRunning
 	if err := r.Status().Update(ctx, bundle); err != nil {
 		log.Error(err, "failed to update status with active job name")
 		return ctrl.Result{}, err
@@ -346,7 +347,7 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 	// Check Job status
 	if job.Status.Succeeded > 0 {
 		log.Info("Job succeeded, updating status to Synced", "tag", latestTag, "jobName", job.Name)
-		bundle.Status.LastJobStatus = "Succeeded"
+		bundle.Status.LastJobStatus = werfv1alpha1.JobStatusSucceeded
 		bundle.Status.ActiveJobName = ""
 		if err := r.updateStatusSynced(ctx, bundle, latestTag); err != nil {
 			log.Error(err, "failed to update status after job success")
@@ -357,7 +358,7 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 
 	if job.Status.Failed > 0 {
 		log.Info("Job failed", "jobName", job.Name)
-		bundle.Status.LastJobStatus = "Failed"
+		bundle.Status.LastJobStatus = werfv1alpha1.JobStatusFailed
 		bundle.Status.ActiveJobName = ""
 		if err := r.updateStatusFailed(ctx, bundle,
 			"Job failed, see job logs for details"); err != nil {

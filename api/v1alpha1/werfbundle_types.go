@@ -28,6 +28,13 @@ const (
 	PhaseFailed  = "Failed"
 )
 
+// Job status constants
+const (
+	JobStatusRunning   = "Running"
+	JobStatusSucceeded = "Succeeded"
+	JobStatusFailed    = "Failed"
+)
+
 // WerfBundleSpec defines the desired state of WerfBundle.
 // Example:
 //

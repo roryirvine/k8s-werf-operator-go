@@ -14,7 +14,7 @@ import (
 )
 
 // CaptureJobLogs retrieves logs from pods associated with a job.
-// Returns the last lines of logs from the job's containers (up to ~5KB).
+// Returns logs up to 1MB in size. Larger logs are truncated with a truncation notice.
 // Uses clientset to access pod logs via the API server.
 func CaptureJobLogs(ctx context.Context, c client.Client, clientset kubernetes.Interface, jobName string, namespace string) (string, error) {
 	// List pods with the job label
@@ -48,10 +48,12 @@ func CaptureJobLogs(ctx context.Context, c client.Client, clientset kubernetes.I
 	// Combine logs from all pods
 	combined := strings.Join(allLogs, "\n---\n")
 
-	// Trim to reasonable size (5KB for Status field storage)
-	if len(combined) > 5120 {
-		// Keep the last 5KB (most recent logs)
-		return combined[len(combined)-5120:], nil
+	// Truncate if larger than 1MB to ensure ConfigMap fits within Kubernetes limits
+	const maxLogSize = 1024 * 1024 // 1MB
+	if len(combined) > maxLogSize {
+		// Keep the last ~1MB and prepend truncation notice
+		truncated := combined[len(combined)-maxLogSize:]
+		return "... (logs truncated - output exceeds 1MB) ...\n" + truncated, nil
 	}
 
 	return combined, nil

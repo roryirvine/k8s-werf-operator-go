@@ -453,6 +453,7 @@ func (r *WerfBundleReconciler) updateStatusFailed(
 
 // storeJobLogs stores job logs in bundle status or ConfigMap if too large.
 // Returns logs suitable for status field (up to 5KB) and whether full logs were stored in ConfigMap.
+// Logs larger than 1MB are truncated during capture to prevent API rejection.
 func (r *WerfBundleReconciler) storeJobLogs(
 	ctx context.Context,
 	bundle *werfv1alpha1.WerfBundle,

@@ -110,6 +110,12 @@ spec:
           status:
             description: WerfBundleStatus defines the observed state of WerfBundle.
             properties:
+              activeJobName:
+                description: |-
+                  ActiveJobName is the name of the currently active job running werf converge.
+                  Set when a job is created, cleared when the job completes or fails.
+                  Used for deduplication to prevent multiple jobs for the same bundle version.
+                type: string
               consecutiveFailures:
                 description: |-
                   ConsecutiveFailures is the number of consecutive registry polling failures.
@@ -136,6 +142,21 @@ spec:
                   LastErrorTime is the timestamp of the last error encountered.
                   Used to calculate backoff intervals for retries.
                 format: date-time
+                type: string
+              lastJobLogs:
+                description: |-
+                  LastJobLogs are the captured logs from the most recent job (tail of output).
+                  Limited to ~5KB to fit in Status; larger logs are stored in a ConfigMap instead.
+                  Provides debugging visibility without requiring external log aggregation.
+                type: string
+              lastJobStatus:
+                description: |-
+                  LastJobStatus is the status of the most recent job (Succeeded, Failed, Running).
+                  Provides quick visibility into the last deployment attempt without listing jobs separately.
+                enum:
+                - Succeeded
+                - Failed
+                - Running
                 type: string
               lastSyncTime:
                 description: LastSyncTime is the timestamp of the last successful

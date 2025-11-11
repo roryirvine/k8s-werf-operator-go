@@ -1183,3 +1183,93 @@ func TestReconcile_CustomResourceLimits_BundleAccepted(t *testing.T) {
 		t.Errorf("expected requeue after, got none")
 	}
 }
+
+func TestReconcile_LogRetention_JobTTLSet(t *testing.T) {
+	ctx := context.Background()
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	// Create bundle with custom log retention (3 days)
+	retentionDays := int32(3)
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-bundle-log-retention",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+				LogRetentionDays:   &retentionDays,
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create bundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+	}
+
+	// First reconciliation creates the job
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "test-bundle-log-retention",
+			Namespace: "default",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	if result.RequeueAfter == 0 {
+		t.Errorf("expected requeue after, got none")
+	}
+
+	// Fetch the created job and verify TTL is set
+	jobs := &batchv1.JobList{}
+	if err := testk8sClient.List(ctx, jobs, client.InNamespace("default")); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	// Find the job for our bundle (it should have the bundle name in it)
+	var createdJob *batchv1.Job
+	for i := range jobs.Items {
+		if strings.Contains(jobs.Items[i].Name, "test-bundle-log-retention") {
+			createdJob = &jobs.Items[i]
+			break
+		}
+	}
+
+	if createdJob == nil {
+		t.Fatal("expected job to be created for bundle")
+	}
+
+	// Verify TTL is set correctly: 3 days = 259200 seconds
+	expectedTTL := int32(3 * 24 * 60 * 60) // 259200
+	if createdJob.Spec.TTLSecondsAfterFinished == nil {
+		t.Fatal("expected TTL to be set on job")
+	}
+	if *createdJob.Spec.TTLSecondsAfterFinished != expectedTTL {
+		t.Errorf("job TTL: got %d seconds, want %d seconds",
+			*createdJob.Spec.TTLSecondsAfterFinished, expectedTTL)
+	}
+}

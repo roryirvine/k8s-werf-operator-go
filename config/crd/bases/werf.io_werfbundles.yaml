@@ -60,6 +60,15 @@ spec:
                 description: Converge contains configuration for deploying the bundle
                   with werf converge.
                 properties:
+                  logRetentionDays:
+                    default: 7
+                    description: |-
+                      LogRetentionDays specifies how many days completed jobs should be retained.
+                      After this period, jobs are automatically cleaned up by Kubernetes.
+                      If not specified, defaults to 7 days.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   resourceLimits:
                     description: |-
                       ResourceLimits specifies CPU and memory limits for werf converge jobs.

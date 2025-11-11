@@ -44,9 +44,8 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 	// Job retry policy: don't retry within the job, controller handles retries
 	backoffLimit := int32(0)
 
-	// Calculate TTL for log retention: default 7 days
-	// TODO: Make this configurable via CRD in future phases
-	ttlSeconds := int32(7 * 24 * 60 * 60) // 7 days in seconds
+	// Calculate TTL for log retention based on configured retention days
+	ttlSeconds := b.getLogRetentionSeconds()
 
 	// Apply resource limits from spec or use defaults
 	cpuLimit := b.getResourceLimit("cpu")
@@ -68,7 +67,7 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,
-			TTLSecondsAfterFinished: &ttlSeconds,
+			TTLSecondsAfterFinished: ttlSeconds,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -142,6 +141,21 @@ func (b *Builder) jobName(tag string) string {
 
 	// Last resort: just use hash
 	return fmt.Sprintf("werf-%s", hash)
+}
+
+// getLogRetentionSeconds returns the TTL in seconds for automatic job cleanup.
+// Converts configured LogRetentionDays to seconds, or returns default of 7 days.
+func (b *Builder) getLogRetentionSeconds() *int32 {
+	var days int32 = 7 // default: 7 days
+
+	// Check if custom retention is specified
+	if b.werf.Spec.Converge.LogRetentionDays != nil && *b.werf.Spec.Converge.LogRetentionDays > 0 {
+		days = *b.werf.Spec.Converge.LogRetentionDays
+	}
+
+	// Convert days to seconds: days * 24 hours/day * 60 min/hour * 60 sec/min
+	ttlSeconds := days * 24 * 60 * 60
+	return &ttlSeconds
 }
 
 // getResourceLimit returns the configured resource limit or a sensible default.

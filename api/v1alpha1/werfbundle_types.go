@@ -93,6 +93,14 @@ type ConvergeConfig struct {
 	// If not specified, defaults are used: 1 CPU and 1Gi memory.
 	// +kubebuilder:validation:Optional
 	ResourceLimits *ResourceLimitsConfig `json:"resourceLimits,omitempty"`
+
+	// LogRetentionDays specifies how many days completed jobs should be retained.
+	// After this period, jobs are automatically cleaned up by Kubernetes.
+	// If not specified, defaults to 7 days.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default:=7
+	LogRetentionDays *int32 `json:"logRetentionDays,omitempty"`
 }
 
 // ResourceLimitsConfig specifies CPU and memory limits for jobs.

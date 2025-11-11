@@ -409,3 +409,108 @@ func TestBuilder_Build_DefaultResourceLimits(t *testing.T) {
 		t.Errorf("Memory limit: got %s, want 1Gi (default)", memLim.String())
 	}
 }
+
+func TestBuilder_Build_CustomLogRetention(t *testing.T) {
+	retentionDays := int32(14)
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "custom-retention",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				LogRetentionDays:   &retentionDays,
+			},
+		},
+	}
+
+	builder := NewBuilder(bundle).WithScheme(testScheme)
+	job, err := builder.Build("v1.0.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify TTL is set correctly: 14 days = 1209600 seconds
+	expectedTTL := int32(14 * 24 * 60 * 60) // 1209600
+	if job.Spec.TTLSecondsAfterFinished == nil {
+		t.Fatal("expected TTL to be set")
+	}
+	if *job.Spec.TTLSecondsAfterFinished != expectedTTL {
+		t.Errorf("TTL: got %d seconds, want %d seconds", *job.Spec.TTLSecondsAfterFinished, expectedTTL)
+	}
+}
+
+func TestBuilder_Build_PartialLogRetention(t *testing.T) {
+	retentionDays := int32(3)
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "partial-retention",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				LogRetentionDays:   &retentionDays,
+				// Other fields like ResourceLimits not specified, should use defaults
+			},
+		},
+	}
+
+	builder := NewBuilder(bundle).WithScheme(testScheme)
+	job, err := builder.Build("v1.0.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify TTL is set correctly: 3 days = 259200 seconds
+	expectedTTL := int32(3 * 24 * 60 * 60) // 259200
+	if job.Spec.TTLSecondsAfterFinished == nil {
+		t.Fatal("expected TTL to be set")
+	}
+	if *job.Spec.TTLSecondsAfterFinished != expectedTTL {
+		t.Errorf("TTL: got %d seconds, want %d seconds", *job.Spec.TTLSecondsAfterFinished, expectedTTL)
+	}
+}
+
+func TestBuilder_Build_DefaultLogRetention(t *testing.T) {
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-retention",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				// LogRetentionDays not specified, should use default 7 days
+			},
+		},
+	}
+
+	builder := NewBuilder(bundle).WithScheme(testScheme)
+	job, err := builder.Build("v1.0.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify TTL is set to default: 7 days = 604800 seconds
+	expectedTTL := int32(7 * 24 * 60 * 60) // 604800
+	if job.Spec.TTLSecondsAfterFinished == nil {
+		t.Fatal("expected TTL to be set")
+	}
+	if *job.Spec.TTLSecondsAfterFinished != expectedTTL {
+		t.Errorf("TTL: got %d seconds, want %d seconds (default 7 days)", *job.Spec.TTLSecondsAfterFinished, expectedTTL)
+	}
+}

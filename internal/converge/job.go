@@ -2,6 +2,8 @@
 package converge
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 
@@ -119,28 +121,39 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 	return job, nil
 }
 
-// jobName generates a deterministic name for the job based on bundle name and tag.
-// Using a hash ensures the name is stable and within Kubernetes naming constraints.
+// jobName generates a unique name for the job with format: <bundle>-<tag-hash>-<uuid>.
+// The tag hash is deterministic (enables duplicate detection), UUID ensures collision prevention.
+// Uses 8 hex chars for both tag hash and UUID for readability.
 func (b *Builder) jobName(tag string) string {
+	// Generate tag hash (deterministic for duplicate detection)
 	h := fnv.New32a()
 	h.Write([]byte(tag))
-	hash := fmt.Sprintf("%x", h.Sum32())[:8]
+	tagHash := fmt.Sprintf("%x", h.Sum32())[:8]
+
+	// Generate random UUID (8 hex chars = 32 bits of randomness)
+	uuidBytes := make([]byte, 4)
+	if _, err := rand.Read(uuidBytes); err != nil {
+		// Fallback to empty UUID if randomness fails (should never happen)
+		return fmt.Sprintf("%s-%s", b.werf.Name, tagHash)
+	}
+	uuid := hex.EncodeToString(uuidBytes)
 
 	// Kubernetes names must be 253 characters or less
-	// Format: werf-<bundle>-<tag-hash>
-	baseName := fmt.Sprintf("werf-%s", b.werf.Name)
-	if len(baseName)+1+len(hash) <= 253 {
-		return fmt.Sprintf("%s-%s", baseName, hash)
+	// Format: <bundle>-<tag-hash>-<uuid>
+	fullName := fmt.Sprintf("%s-%s-%s", b.werf.Name, tagHash, uuid)
+	if len(fullName) <= 253 {
+		return fullName
 	}
 
-	// Fallback: truncate bundle name if needed
-	maxLen := 253 - len(hash) - 6 // "werf--" is 6 chars
-	if maxLen > 0 {
-		return fmt.Sprintf("werf-%s-%s", b.werf.Name[:maxLen], hash)
+	// Truncate bundle name if needed to fit within 253 chars
+	// Account for: bundle-hash-uuid = bundle-(8)-(8) with 2 hyphens
+	maxBundleLen := 253 - len(tagHash) - len(uuid) - 2
+	if maxBundleLen > 0 {
+		return fmt.Sprintf("%s-%s-%s", b.werf.Name[:maxBundleLen], tagHash, uuid)
 	}
 
-	// Last resort: just use hash
-	return fmt.Sprintf("werf-%s", hash)
+	// Last resort: use hash and uuid only (very long bundle names)
+	return fmt.Sprintf("%s-%s", tagHash, uuid)
 }
 
 // getLogRetentionSeconds returns the TTL in seconds for automatic job cleanup.

@@ -67,6 +67,9 @@ type WerfBundleReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;update;get;list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 
 // Reconcile implements the reconciliation loop for WerfBundle.
 func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

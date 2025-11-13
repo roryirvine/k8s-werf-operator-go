@@ -61,6 +61,7 @@ func TestReconcile_CreateWerfBundle_CreatesJob(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	// Reconcile
@@ -145,6 +146,7 @@ func TestReconcile_SameTagTwice_NoDuplicateJob(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -226,6 +228,7 @@ func TestReconcile_JobRunning_StatusRemainsSyncing(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -308,6 +311,7 @@ func TestReconcile_MissingServiceAccount_FailsWithError(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -383,6 +387,7 @@ func TestReconcile_RegistryError_ExponentialBackoff(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -475,6 +480,7 @@ func TestReconcile_FifthFailure_MarksAsFailed(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -545,6 +551,7 @@ func TestReconcile_SuccessAfterFailures_ResetsCounter(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -612,6 +619,7 @@ func TestE2E_CreateBundle_CreatesJob(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -763,6 +771,7 @@ func TestReconcile_ActiveJob_Deduplicates(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -887,6 +896,7 @@ func TestReconcile_ActiveJobDisappears_CreatesNewJob(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	req := reconcile.Request{
@@ -1165,6 +1175,7 @@ func TestReconcile_CustomResourceLimits_BundleAccepted(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{
@@ -1226,6 +1237,7 @@ func TestReconcile_LogRetention_JobTTLSet(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	// First reconciliation creates the job
@@ -1323,6 +1335,7 @@ func TestReconcile_ConfigMapTruncation_LogsExceed1MB(t *testing.T) {
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
 		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
 	}
 
 	// First reconciliation creates the job

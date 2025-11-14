@@ -1623,3 +1623,283 @@ func TestReconcile_ETagMismatch_RequeuesAfterChange(t *testing.T) {
 			fetchedBundle2.Status.LastAppliedTag)
 	}
 }
+
+func TestReconcile_JobCompletesSuccessfully_StatusUpdatedToSynced(t *testing.T) {
+	ctx := context.Background()
+
+	// Create ServiceAccount for the test
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundleName := fmt.Sprintf("test-job-success-%d", time.Now().UnixNano())
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/success-bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/success-bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// First reconcile - creates job for v1.0.0
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("first reconcile failed: %v", err)
+	}
+
+	// Get bundle after job creation
+	bundle1 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, bundle1); err != nil {
+		t.Fatalf("failed to get bundle after job creation: %v", err)
+	}
+
+	if bundle1.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing after job creation, got %s", bundle1.Status.Phase)
+	}
+
+	if bundle1.Status.ActiveJobName == "" {
+		t.Errorf("expected ActiveJobName to be set after job creation")
+	}
+	if bundle1.Status.LastAppliedTag == "" {
+		t.Errorf("expected LastAppliedTag to be set after job creation, got empty")
+	}
+	jobName := bundle1.Status.ActiveJobName
+	t.Logf("After first reconcile: Phase=%s, ActiveJobName=%s, LastAppliedTag=%s, LastETag=%s",
+		bundle1.Status.Phase, bundle1.Status.ActiveJobName, bundle1.Status.LastAppliedTag, bundle1.Status.LastETag)
+
+	// Get the created job and simulate successful completion
+	job := &batchv1.Job{}
+	jobKey := types.NamespacedName{Name: jobName, Namespace: "default"}
+	if err := testk8sClient.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+
+	// Mark job as succeeded
+	now := metav1.Now()
+	job.Status.Succeeded = 1
+	job.Status.StartTime = &now
+	job.Status.CompletionTime = &now
+	job.Status.Conditions = []batchv1.JobCondition{
+		{
+			Type:               batchv1.JobSuccessCriteriaMet,
+			Status:             corev1.ConditionTrue,
+			LastProbeTime:      now,
+			LastTransitionTime: now,
+		},
+		{
+			Type:               batchv1.JobComplete,
+			Status:             corev1.ConditionTrue,
+			LastProbeTime:      now,
+			LastTransitionTime: now,
+		},
+	}
+	if err := testk8sClient.Status().Update(ctx, job); err != nil {
+		t.Fatalf("failed to update job status: %v", err)
+	}
+
+	// Before second reconcile, simulate new tag arriving in registry
+	// This forces the controller to call ensureJobExists, which detects active job
+	// and calls monitorJobCompletion to handle the job completion
+	fakeReg.SetTags("ghcr.io/test/success-bundle", []string{"v1.0.0", "v1.0.1"})
+
+	// Second reconcile - should detect new tag and monitor existing job for completion
+	result2, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("second reconcile failed: %v", err)
+	}
+
+	// On completion, should return no requeue (nil, nil)
+	if result2.RequeueAfter != 0 {
+		t.Errorf("expected no requeue after job completion, got %v", result2.RequeueAfter)
+	}
+
+	// Get updated bundle
+	bundle2 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, bundle2); err != nil {
+		t.Fatalf("failed to get bundle after job completion: %v", err)
+	}
+	t.Logf(
+		"After second reconcile: Phase=%s, ActiveJobName=%s, LastAppliedTag=%s, LastETag=%s, LastJobStatus=%s",
+		bundle2.Status.Phase, bundle2.Status.ActiveJobName, bundle2.Status.LastAppliedTag,
+		bundle2.Status.LastETag, bundle2.Status.LastJobStatus)
+
+	// Verify ActiveJobName was cleared
+	if bundle2.Status.ActiveJobName != "" {
+		t.Errorf("expected ActiveJobName to be cleared after completion, got %q", bundle2.Status.ActiveJobName)
+	}
+
+	// Verify status phase updated to Synced
+	if bundle2.Status.Phase != werfv1alpha1.PhaseSynced {
+		t.Errorf("expected phase Synced after successful job, got %s", bundle2.Status.Phase)
+	}
+
+	// Verify LastJobStatus marked as Succeeded
+	if bundle2.Status.LastJobStatus != werfv1alpha1.JobStatusSucceeded {
+		t.Errorf("expected LastJobStatus Succeeded, got %s", bundle2.Status.LastJobStatus)
+	}
+}
+
+func TestReconcile_JobFails_StatusUpdatedToFailed(t *testing.T) {
+	ctx := context.Background()
+
+	// Create ServiceAccount for the test
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundleName := fmt.Sprintf("test-job-fail-%d", time.Now().UnixNano())
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/fail-bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/fail-bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// First reconcile - creates job
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("first reconcile failed: %v", err)
+	}
+
+	// Get bundle after job creation
+	bundle1 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, bundle1); err != nil {
+		t.Fatalf("failed to get bundle after job creation: %v", err)
+	}
+
+	if bundle1.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing after job creation, got %s", bundle1.Status.Phase)
+	}
+
+	if bundle1.Status.ActiveJobName == "" {
+		t.Errorf("expected ActiveJobName to be set after job creation")
+	}
+	jobName := bundle1.Status.ActiveJobName
+
+	// Get the created job and simulate failure
+	job := &batchv1.Job{}
+	jobKey := types.NamespacedName{Name: jobName, Namespace: "default"}
+	if err := testk8sClient.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+
+	// Mark job as failed
+	// For a failed job, we just need Failed = 1 and startTime
+	// The controller checks job.Status.Failed directly, not completion conditions
+	// Skip completionTime since it requires Complete=True condition
+	now := metav1.Now()
+	job.Status.Failed = 1
+	job.Status.StartTime = &now
+	if err := testk8sClient.Status().Update(ctx, job); err != nil {
+		t.Fatalf("failed to update job status: %v", err)
+	}
+
+	// Before second reconcile, simulate new tag arriving in registry
+	// This forces the controller to call ensureJobExists, which detects active job
+	// and calls monitorJobCompletion to handle the job failure
+	fakeReg.SetTags("ghcr.io/test/fail-bundle", []string{"v1.0.0", "v1.0.1"})
+
+	// Second reconcile - should detect new tag and monitor existing job for failure
+	result2, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("second reconcile failed: %v", err)
+	}
+
+	// On completion (even failure), should return no requeue
+	if result2.RequeueAfter != 0 {
+		t.Errorf("expected no requeue after job failure, got %v", result2.RequeueAfter)
+	}
+
+	// Get updated bundle
+	bundle2 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, bundle2); err != nil {
+		t.Fatalf("failed to get bundle after job failure: %v", err)
+	}
+
+	// Verify ActiveJobName was cleared
+	if bundle2.Status.ActiveJobName != "" {
+		t.Errorf("expected ActiveJobName to be cleared after failure, got %q", bundle2.Status.ActiveJobName)
+	}
+
+	// Verify status phase updated to Failed
+	if bundle2.Status.Phase != werfv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed after failed job, got %s", bundle2.Status.Phase)
+	}
+
+	// Verify LastJobStatus marked as Failed
+	if bundle2.Status.LastJobStatus != werfv1alpha1.JobStatusFailed {
+		t.Errorf("expected LastJobStatus Failed, got %s", bundle2.Status.LastJobStatus)
+	}
+
+	// Verify error message is set in status
+	if bundle2.Status.LastErrorMessage == "" {
+		t.Errorf("expected error message in status after job failure")
+	}
+	if !strings.Contains(bundle2.Status.LastErrorMessage, "failed") {
+		t.Errorf("expected error message to mention failure, got: %s",
+			bundle2.Status.LastErrorMessage)
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -1902,4 +1903,105 @@ func TestReconcile_JobFails_StatusUpdatedToFailed(t *testing.T) {
 		t.Errorf("expected error message to mention failure, got: %s",
 			bundle2.Status.LastErrorMessage)
 	}
+}
+
+func TestReconcile_NoResourceLimits_DefaultsApplied(t *testing.T) {
+	ctx := context.Background()
+
+	// Create ServiceAccount for the test
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default",
+			Namespace: "default",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundleName := fmt.Sprintf("test-default-limits-%d", time.Now().UnixNano())
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/default-limits-bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+				// Intentionally NOT specifying ResourceLimits to test defaults
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/default-limits-bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// Reconcile to create job with default limits
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Get bundle to find the created job name
+	bundle1 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, bundle1); err != nil {
+		t.Fatalf("failed to get bundle after job creation: %v", err)
+	}
+
+	if bundle1.Status.ActiveJobName == "" {
+		t.Errorf("expected ActiveJobName to be set after job creation")
+	}
+	jobName := bundle1.Status.ActiveJobName
+
+	// Get the created job and verify default resource limits
+	job := &batchv1.Job{}
+	jobKey := types.NamespacedName{Name: jobName, Namespace: "default"}
+	if err := testk8sClient.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+
+	// Verify default resource limits are applied
+	if len(job.Spec.Template.Spec.Containers) == 0 {
+		t.Fatal("expected at least one container in job spec")
+	}
+
+	container := job.Spec.Template.Spec.Containers[0]
+	if container.Resources.Limits == nil {
+		t.Fatal("expected resource limits to be set on container")
+	}
+
+	// Verify CPU limit is 1 (default)
+	cpuLimit := container.Resources.Limits.Cpu()
+	expectedCPU := resource.MustParse("1")
+	if cpuLimit.Cmp(expectedCPU) != 0 {
+		t.Errorf("expected CPU limit of 1, got %s", cpuLimit.String())
+	}
+
+	// Verify Memory limit is 1Gi (default)
+	memLimit := container.Resources.Limits.Memory()
+	expectedMem := resource.MustParse("1Gi")
+	if memLimit.Cmp(expectedMem) != 0 {
+		t.Errorf("expected Memory limit of 1Gi, got %s", memLimit.String())
+	}
+
+	t.Logf("Default resource limits correctly applied: CPU=%s, Memory=%s",
+		cpuLimit.String(), memLimit.String())
 }

@@ -1406,3 +1406,220 @@ func TestReconcile_ConfigMapTruncation_LogsExceed1MB(t *testing.T) {
 	// is accepted and processed without API rejection due to ConfigMap size limits.
 	// The log truncation logic (>1MB) ensures ConfigMaps stay within limits.
 }
+
+func TestReconcile_ETagMatch_NoJobCreated(t *testing.T) {
+	ctx := context.Background()
+
+	bundleName := fmt.Sprintf("test-etag-match-%d", time.Now().UnixNano())
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/etag-bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/etag-bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundleName, Namespace: "default"},
+	}
+
+	// First reconcile - should create job and store ETag
+	result1, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("first reconcile failed: %v", err)
+	}
+	if result1.RequeueAfter == 0 {
+		t.Errorf("expected requeue after first reconcile")
+	}
+
+	// Verify job was created (filter by bundle name in job name)
+	jobList := &batchv1.JobList{}
+	if err := testk8sClient.List(ctx, jobList, client.InNamespace("default")); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+	jobsForBundle := 0
+	for _, job := range jobList.Items {
+		if strings.Contains(job.Name, bundleName) {
+			jobsForBundle++
+		}
+	}
+	if jobsForBundle != 1 {
+		t.Fatalf("expected 1 job for this bundle after first reconcile, got %d", jobsForBundle)
+	}
+
+	// Get updated bundle to check ETag was stored
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get updated bundle: %v", err)
+	}
+	if updatedBundle.Status.LastETag == "" {
+		t.Errorf("expected LastETag to be set after first reconcile")
+	}
+	firstETag := updatedBundle.Status.LastETag
+
+	// Second reconcile with same tags - ETag matches, should NOT create job
+	result2, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("second reconcile failed: %v", err)
+	}
+
+	// Should requeue based on poll interval, not create job
+	if result2.RequeueAfter == 0 {
+		t.Errorf("expected requeue after second reconcile (ETag match)")
+	}
+
+	// Verify NO new job was created (still only 1 for this bundle)
+	jobList2 := &batchv1.JobList{}
+	if err := testk8sClient.List(ctx, jobList2, client.InNamespace("default")); err != nil {
+		t.Fatalf("failed to list jobs after second reconcile: %v", err)
+	}
+	jobsForBundle2 := 0
+	for _, job := range jobList2.Items {
+		if strings.Contains(job.Name, bundleName) {
+			jobsForBundle2++
+		}
+	}
+	if jobsForBundle2 != 1 {
+		t.Fatalf("expected 1 job for this bundle (no duplicate), got %d", jobsForBundle2)
+	}
+
+	// Verify ETag is unchanged
+	finalBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, finalBundle); err != nil {
+		t.Fatalf("failed to get final bundle: %v", err)
+	}
+	if finalBundle.Status.LastETag != firstETag {
+		t.Errorf("ETag should not change on 304 Not Modified: was %s, got %s", firstETag, finalBundle.Status.LastETag)
+	}
+
+	// Status phase should still be Syncing from first reconcile (no change)
+	if finalBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing, got %s", finalBundle.Status.Phase)
+	}
+}
+
+func TestReconcile_ETagMismatch_RequeuesAfterChange(t *testing.T) {
+	ctx := context.Background()
+
+	// Create two bundles pointing to the same registry
+	// This tests that when tags at registry change, a fresh reconcile detects the new tags
+	bundle1Name := fmt.Sprintf("test-etag-1st-%d", time.Now().UnixNano())
+	bundle1 := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundle1Name,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/etag-change-bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	bundle2Name := fmt.Sprintf("test-etag-2nd-%d", time.Now().UnixNano())
+	bundle2 := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundle2Name,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/etag-change-bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle1); err != nil {
+		t.Fatalf("failed to create bundle1: %v", err)
+	}
+	if err := testk8sClient.Create(ctx, bundle2); err != nil {
+		t.Fatalf("failed to create bundle2: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	// Initial tags: only v1.0.0
+	fakeReg.SetTags("ghcr.io/test/etag-change-bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	// First bundle reconciles when registry has only v1.0.0
+	req1 := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundle1Name, Namespace: "default"},
+	}
+	_, err := reconciler.Reconcile(ctx, req1)
+	if err != nil {
+		t.Fatalf("reconcile bundle1 failed: %v", err)
+	}
+
+	fetchedBundle1 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req1.NamespacedName, fetchedBundle1); err != nil {
+		t.Fatalf("failed to get bundle1: %v", err)
+	}
+	etagFor_v1 := fetchedBundle1.Status.LastETag
+	if etagFor_v1 == "" {
+		t.Errorf("expected LastETag for v1.0.0")
+	}
+
+	// Now update registry to have more tags
+	fakeReg.SetTags("ghcr.io/test/etag-change-bundle", []string{"v1.0.0", "v2.0.0"})
+
+	// Second bundle reconciles after registry changed (tags now include v2.0.0)
+	// This bundle has no prior state, so it will see the new tags
+	req2 := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: bundle2Name, Namespace: "default"},
+	}
+	_, err = reconciler.Reconcile(ctx, req2)
+	if err != nil {
+		t.Fatalf("reconcile bundle2 failed: %v", err)
+	}
+
+	fetchedBundle2 := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req2.NamespacedName, fetchedBundle2); err != nil {
+		t.Fatalf("failed to get bundle2: %v", err)
+	}
+
+	// ETag format: "tags-{count}-{first}-{last}"
+	// bundle1 saw: [v1.0.0] → "tags-1-v1.0.0-v1.0.0"
+	// bundle2 sees: [v1.0.0, v2.0.0] → "tags-2-v1.0.0-v2.0.0"
+	if fetchedBundle2.Status.LastETag == etagFor_v1 {
+		t.Errorf("ETag should be different when more tags exist: both %q", fetchedBundle2.Status.LastETag)
+	}
+
+	// bundle2 should detect v2.0.0 as the latest tag
+	if fetchedBundle2.Status.LastAppliedTag != "v2.0.0" {
+		t.Errorf("expected latest tag v2.0.0 when registry has [v1.0.0, v2.0.0], got %s",
+			fetchedBundle2.Status.LastAppliedTag)
+	}
+}

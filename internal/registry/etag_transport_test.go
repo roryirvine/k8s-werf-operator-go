@@ -124,6 +124,19 @@ func TestETagRoundTripper_ServiceUnavailable(t *testing.T) {
 	}
 }
 
+func TestETagRoundTripper_NotFound_Error(t *testing.T) {
+	// Verify that 404 returns NotFoundError
+	mockRT := &mockRoundTripper{statusCode: 404}
+	transport := newETagRoundTripper(mockRT, "")
+
+	req, _ := http.NewRequest("GET", "http://example.com/v2/repo/tags/list", nil)
+	_, err := transport.RoundTrip(req)
+
+	if _, ok := err.(*NotFoundError); !ok {
+		t.Errorf("expected NotFoundError for 404, got %T: %v", err, err)
+	}
+}
+
 func TestETagRoundTripper_Success(t *testing.T) {
 	// Verify that 200 OK returns response normally
 	mockRT := &mockRoundTripper{statusCode: 200, etagValue: `"new-etag"`}

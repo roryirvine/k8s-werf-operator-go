@@ -383,3 +383,46 @@ func TestETagConsistency(t *testing.T) {
 		t.Errorf("ETag should remain same on NotModifiedError")
 	}
 }
+
+func TestListTagsWithETag_NotFoundError(t *testing.T) {
+	// Verify that NotFoundError is returned when repository doesn't exist
+	client := NewFakeClient()
+	notFoundErr := &NotFoundError{Err: fmt.Errorf("HTTP 404: Not Found")}
+	client.SetError("missing-repo", notFoundErr)
+	ctx := context.Background()
+
+	tags, etag, err := client.ListTagsWithETag(ctx, "missing-repo", nil, "")
+
+	// Should return the NotFoundError
+	if err != notFoundErr {
+		t.Errorf("expected NotFoundError, got %T: %v", err, err)
+	}
+
+	// Tags and ETag should be empty/nil
+	if tags != nil {
+		t.Errorf("expected nil tags on NotFoundError, got %v", tags)
+	}
+	if etag != "" {
+		t.Errorf("expected empty ETag on NotFoundError, got %q", etag)
+	}
+}
+
+func TestGetLatestTag_NotFoundError(t *testing.T) {
+	// Verify that NotFoundError is propagated from ListTags
+	client := NewFakeClient()
+	notFoundErr := &NotFoundError{Err: fmt.Errorf("HTTP 404: Not Found")}
+	client.SetError("missing-repo", notFoundErr)
+	ctx := context.Background()
+
+	tag, err := client.GetLatestTag(ctx, "missing-repo", nil)
+
+	// Should return the NotFoundError
+	if err != notFoundErr {
+		t.Errorf("expected NotFoundError, got %T: %v", err, err)
+	}
+
+	// Tag should be empty
+	if tag != "" {
+		t.Errorf("expected empty tag on NotFoundError, got %q", tag)
+	}
+}

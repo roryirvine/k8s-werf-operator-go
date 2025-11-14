@@ -26,8 +26,9 @@ func newETagRoundTripper(base http.RoundTripper, lastETag string) *etagRoundTrip
 // Sets If-None-Match header if lastETag is set, and captures ETag from response.
 // Detects HTTP error status codes and returns appropriate error types.
 // Returns NotModifiedError if server returns 304 Not Modified.
-// Returns NetworkError for 5xx status codes.
+// Returns NotFoundError for 404 status code.
 // Returns AuthError for 401/403 status codes.
+// Returns NetworkError for 5xx status codes.
 func (t *etagRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Set If-None-Match header if we have a cached ETag
 	if t.lastETag != "" {
@@ -49,6 +50,10 @@ func (t *etagRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	case http.StatusNotModified: // 304
 		// Content hasn't changed, signal with NotModifiedError
 		return nil, &NotModifiedError{}
+
+	case http.StatusNotFound: // 404
+		// Repository does not exist
+		return nil, &NotFoundError{Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))}
 
 	case http.StatusUnauthorized, http.StatusForbidden: // 401, 403
 		// Authentication/authorization failure

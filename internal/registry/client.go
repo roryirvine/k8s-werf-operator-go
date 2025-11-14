@@ -50,6 +50,21 @@ func (e *AuthError) Unwrap() error {
 	return e.Err
 }
 
+// NotFoundError indicates the requested repository does not exist (HTTP 404).
+// This is a permanent error - retrying won't help. Indicates misconfiguration
+// (wrong registry URL or repository name).
+type NotFoundError struct {
+	Err error
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("repository not found: %v", e.Err)
+}
+
+func (e *NotFoundError) Unwrap() error {
+	return e.Err
+}
+
 // Client defines the interface for OCI registry operations.
 type Client interface {
 	// ListTags returns all tags available in the given repository.

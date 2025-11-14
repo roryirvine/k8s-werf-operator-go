@@ -266,6 +266,122 @@ spec:
 			_, _ = utils.Run(cmd)
 		})
 
+		It("should create job with specified resource limits on successful registry lookup", func() {
+			By("creating a test namespace for the bundle")
+			bundleNS := "werfbundle-test-3"
+			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+			By("creating ServiceAccount for werf converge jobs")
+			saYAML := fmt.Sprintf(`
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: werf-converge
+  namespace: %s
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(saYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceAccount")
+
+			By("creating a WerfBundle with resource limits")
+			werfBundleYAML := fmt.Sprintf(`
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: test-bundle-with-limits
+  namespace: %s
+spec:
+  registry:
+    url: ghcr.io/werf/test-bundle
+  converge:
+    serviceAccountName: werf-converge
+    resourceLimits:
+      cpu: 500m
+      memory: 512Mi
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(werfBundleYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
+
+			By("waiting for Job to be created")
+			var jobName string
+			verifyJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
+					"-l", "app.kubernetes.io/instance=test-bundle-with-limits",
+					"-o", "jsonpath={.items[*].metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Expected Job to be created")
+				jobName = strings.TrimSpace(output)
+				g.Expect(jobName).NotTo(BeEmpty(), "Job name should not be empty")
+			}
+			Eventually(verifyJobCreated, 30*time.Second).Should(Succeed())
+
+			By("verifying Job has specified resource limits")
+			verifyJobResourceLimits := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "job", jobName, "-n", bundleNS,
+					"-o", "jsonpath={.spec.template.spec.containers[0].resources.limits}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring("500m"), "Job should have CPU limit of 500m")
+				g.Expect(output).To(ContainSubstring("512Mi"), "Job should have memory limit of 512Mi")
+			}
+			Eventually(verifyJobResourceLimits, 30*time.Second).Should(Succeed())
+
+			By("verifying WerfBundle status is Syncing (job has been created)")
+			verifyBundleSyncing := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-with-limits", "-n", bundleNS,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Syncing"), "Expected bundle status to be Syncing")
+			}
+			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
+
+			By("marking the job as succeeded to simulate successful converge")
+			// Patch job status to mark it as succeeded
+			now := time.Now().UTC().Format(time.RFC3339)
+			patchTemplate := `[{"op":"replace","path":"/status/succeeded","value":1},` +
+				`{"op":"replace","path":"/status/startTime","value":"%s"},` +
+				`{"op":"replace","path":"/status/completionTime","value":"%s"},` +
+				`{"op":"replace","path":"/status/conditions","value":[{"type":"Complete","status":"True","reason":"Succeeded"}]}]`
+			patchJSON := fmt.Sprintf(patchTemplate, now, now)
+			cmd = exec.Command("kubectl", "patch", "job", jobName, "-n", bundleNS,
+				"--type", "json", "-p", patchJSON)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to patch job status")
+
+			By("waiting for WerfBundle status to transition to Synced after job completion")
+			verifyBundleSynced := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-with-limits", "-n", bundleNS,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Synced"), "Expected bundle status to be Synced after job completion")
+			}
+			Eventually(verifyBundleSynced, 30*time.Second).Should(Succeed())
+
+			By("verifying WerfBundle has LastAppliedTag set")
+			verifyLastAppliedTag := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-with-limits", "-n", bundleNS,
+					"-o", "jsonpath={.status.lastAppliedTag}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Expected lastAppliedTag to be set")
+			}
+			Eventually(verifyLastAppliedTag, 30*time.Second).Should(Succeed())
+
+			By("cleaning up test namespace")
+			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
+			_, _ = utils.Run(cmd)
+		})
+
 	})
 })
 

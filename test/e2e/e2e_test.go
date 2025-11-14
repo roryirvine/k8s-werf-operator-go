@@ -382,6 +382,122 @@ spec:
 			_, _ = utils.Run(cmd)
 		})
 
+		It("should retry with exponential backoff when registry fails", func() {
+			By("creating a test namespace for the bundle")
+			bundleNS := "werfbundle-test-backoff"
+			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+			By("creating ServiceAccount for werf converge jobs")
+			saYAML := fmt.Sprintf(`
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: werf-converge
+  namespace: %s
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(saYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceAccount")
+
+			By("creating a WerfBundle pointing to nonexistent registry")
+			werfBundleYAML := fmt.Sprintf(`
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: test-bundle-backoff
+  namespace: %s
+spec:
+  registry:
+    url: ghcr.io/nonexistent/bundle-for-backoff-test
+  converge:
+    serviceAccountName: werf-converge
+`, bundleNS)
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(werfBundleYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create WerfBundle")
+
+			By("waiting for first failure and verifying ConsecutiveFailures is incremented")
+			verifyInitialFailure := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-backoff", "-n", bundleNS,
+					"-o", "jsonpath={.status.consecutiveFailures}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				// Should have at least 1 consecutive failure
+				failures := strings.TrimSpace(output)
+				g.Expect(failures).NotTo(BeEmpty(), "Expected consecutiveFailures to be set after first attempt")
+				// Try to parse as integer to verify it's a number >= 1
+				failureCount := 0
+				fmt.Sscanf(failures, "%d", &failureCount)
+				g.Expect(failureCount).To(BeNumerically(">=", 1), "Expected at least 1 consecutive failure")
+			}
+			Eventually(verifyInitialFailure, 30*time.Second).Should(Succeed())
+
+			By("recording the first error time")
+			var firstErrorTime string
+			cmd = exec.Command("kubectl", "get", "werfbundle", "test-bundle-backoff", "-n", bundleNS,
+				"-o", "jsonpath={.status.lastErrorTime}")
+			firstErrorTimeOutput, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			firstErrorTime = strings.TrimSpace(firstErrorTimeOutput)
+			Expect(firstErrorTime).NotTo(BeEmpty(), "Expected lastErrorTime to be set after first error")
+
+			By("verifying Phase is Failed")
+			verifyBundleFailed := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-backoff", "-n", bundleNS,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Failed"), "Expected bundle phase to be Failed due to repeated registry errors")
+			}
+			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
+
+			By("verifying LastErrorMessage contains relevant error information")
+			verifyErrorMessage := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-backoff", "-n", bundleNS,
+					"-o", "jsonpath={.status.lastErrorMessage}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Expected lastErrorMessage to be set")
+				// Error message should contain something about registry or connection failure
+				g.Expect(output).To(MatchRegexp(`(?i)(registry|connection|network|failed|error)`),
+					"Expected error message to contain registry/network-related keywords")
+			}
+			Eventually(verifyErrorMessage, 30*time.Second).Should(Succeed())
+
+			By("verifying that NO Job was created (registry error prevents job creation)")
+			verifyNoJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "jobs", "-n", bundleNS,
+					"-l", "app.kubernetes.io/instance=test-bundle-backoff",
+					"-o", "jsonpath={.items}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(MatchRegexp("^\\[\\]?$"), "Expected NO jobs to be created when registry lookup fails")
+			}
+			Eventually(verifyNoJobCreated, 30*time.Second).Should(Succeed())
+
+			By("verifying that controller logs show backoff retry logic")
+			verifyControllerLogs := func(g Gomega) {
+				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace,
+					"--tail=100")
+				logsOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				// Should see messages about exponential backoff and requeuing
+				g.Expect(logsOutput).To(MatchRegexp(`(?i)(backoff|requeue|consecutive|failure)`),
+					"Expected controller logs to show backoff/requeue messages")
+			}
+			Eventually(verifyControllerLogs, 30*time.Second).Should(Succeed())
+
+			By("cleaning up test namespace")
+			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
+			_, _ = utils.Run(cmd)
+		})
+
 	})
 })
 

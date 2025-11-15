@@ -208,32 +208,29 @@ This will:
 
 - **[DESIGN.md](docs/DESIGN.md)** - Architecture and design decisions
 - **[PLAN.md](docs/PLAN.md)** - Implementation roadmap for all slices
+- **[Configuration Reference](docs/configuration.md)** - Detailed configuration field documentation, defaults, and reliability features
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Diagnostic procedures and solutions for common issues
 - **[RBAC Setup](docs/job-rbac.md)** - Detailed RBAC configuration guide
 
 ## Troubleshooting
 
-### Bundle stuck in "Syncing" state
+For common issues and diagnostic procedures, see the [Troubleshooting Guide](docs/troubleshooting.md).
 
-- Check ServiceAccount exists in target namespace:
-  ```bash
-  kubectl get sa werf-converge -n <target-namespace>
-  ```
-- Check operator logs for errors:
-  ```bash
-  kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
-  ```
+Quick reference for the most common issues:
 
-### Registry connection fails
+**Bundle stuck in Syncing**
+- Check `status.consecutiveFailures` and `status.lastErrorMessage`
+- Verify registry URL is accessible: `kubectl describe werfbundle my-app -n k8s-werf-operator-go-system`
+- Check operator logs: `kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager`
 
-- Verify registry URL is correct and accessible
-- Check network connectivity from operator pod
-- For private registries, credentials must be configured (Slice 2 feature)
+**Job fails with OOMKilled**
+- Increase memory limits: `kubectl patch werfbundle my-app --type merge -p '{"spec":{"converge":{"resourceLimits":{"memory":"2Gi"}}}}'`
 
-### Job not running
+**Jobs not being created**
+- Verify ServiceAccount exists in target namespace: `kubectl get sa werf-converge -n <namespace>`
+- Check permissions: ServiceAccount must have access to create resources
 
-- Check if werf image is available: `werf:latest` from `ghcr.io/werf/werf`
-- Verify ServiceAccount has permissions to create necessary resources
-- Check Job logs: `kubectl logs job/<job-name> -n <namespace>`
+For detailed troubleshooting procedures, error message explanations, and advanced debugging, see the [Troubleshooting Guide](docs/troubleshooting.md).
 
 ## Development
 

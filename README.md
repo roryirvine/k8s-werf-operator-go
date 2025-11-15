@@ -4,15 +4,19 @@ A Kubernetes operator for deploying and managing applications packaged with [Wer
 
 ## Current Status
 
-**Slice 1 - Basic Bundle Deployment** (Alpha)
+**Slice 2 - Enhanced Registry Integration** (Alpha)
 
-This is early-stage software (v1alpha1 API). The operator supports basic bundle deployment with the following functionality:
+This is early-stage software (v1alpha1 API). The operator supports bundle deployment with robust registry polling and configurable resource management.
+
+### What works now
 
 - Watch for `WerfBundle` custom resources in the cluster
 - Poll OCI registries for available bundle tags
-- Create Kubernetes Jobs to run `werf converge` deployments
+- Robust registry polling with ETag caching and exponential backoff for reliability
+- Create Kubernetes Jobs to run `werf converge` deployments with configurable resource limits
 - Track deployment status in the WerfBundle resource
 - Proper RBAC separation (operator minimal, job permissions namespace-scoped)
+- Capture and retain deployment job logs for troubleshooting
 
 **What does NOT work yet:**
 - Semantic versioning (tags are sorted lexicographically, not by semver)
@@ -22,7 +26,7 @@ This is early-stage software (v1alpha1 API). The operator supports basic bundle 
 - Helm integration
 - Custom value overrides
 
-See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
+See [PLAN.md](docs/PLAN.md) for the full roadmap including Slice 3+.
 
 ## Quick Start
 
@@ -109,6 +113,9 @@ See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
        pollInterval: 15m
      converge:
        serviceAccountName: werf-converge
+       resourceLimits:
+         cpu: "2"
+         memory: "2Gi"
    EOF
    ```
 
@@ -119,6 +126,48 @@ See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
    kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
    kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
    ```
+
+## Reliability Features
+
+The operator includes several built-in features to ensure robust registry polling and reliable deployment:
+
+### ETag Caching
+
+The operator uses HTTP ETag caching to minimize registry requests and save bandwidth. When polling for new bundle versions:
+- First poll requests the full tag list and stores the ETag response header
+- Subsequent polls include the ETag in the `If-None-Match` header
+- If content hasn't changed, the registry responds with HTTP 304 (Not Modified), saving bandwidth
+- This is particularly valuable for large registries or frequent polling intervals
+
+### Exponential Backoff
+
+When registry polling fails (network errors, timeouts, server errors), the operator automatically retries with exponential backoff:
+- Retry attempts: Up to 5 consecutive failures before marking the bundle as failed
+- Backoff sequence: 30s → 1m → 2m → 4m → 8m
+- Each failure increments a counter in the WerfBundle status (`status.consecutiveFailures`)
+- Manual intervention or registry recovery will reset the counter
+
+### Jitter
+
+To prevent the "thundering herd" problem when multiple bundles are scheduled to poll simultaneously, the operator adds randomness to polling intervals:
+- Jitter: ±20% randomness applied to configured poll intervals
+- Example: `pollInterval: 15m` will actually poll between 12-18 minutes
+- Spreads load across time rather than having all bundles poll at the same moment
+
+### Configurable Resource Limits
+
+Jobs that run `werf converge` can consume significant resources. Configure limits to prevent cluster disruption:
+- Default limits: 1 CPU, 1Gi memory
+- Example: `resourceLimits: {cpu: "2", memory: "2Gi"}`
+- Recommended for production: Match expected Werf workload requirements
+- Jobs that exceed memory limits will be killed; check pod logs for `OOMKilled` status
+
+### Job Logs Retention
+
+Deployment logs are automatically captured and retained in the WerfBundle status for troubleshooting:
+- Default retention: 7 days (configurable via `logRetentionDays`)
+- Logs are captured from the completed Job pod
+- Useful for debugging failed deployments without accessing the cluster directly
 
 ## Running Tests
 
@@ -232,11 +281,11 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 ## Next Steps
 
-What's coming in Slice 2 and beyond:
+Current roadmap:
 
-- **Slice 2:** Enhanced registry integration with ETag caching, exponential backoff, and improved error handling
-- **Slice 3:** Values management and multi-namespace support
+- **Slice 2:** ✓ Enhanced registry integration with ETag caching, exponential backoff, and configurable resource management (complete)
+- **Slice 3:** Values management and cross-namespace deployments
 - **Slice 4:** Drift detection and automatic correction
 - **Slice 5:** Advanced features including semantic versioning and username/password auth
 
-Current plans and implementation details are in [PLAN.md](docs/PLAN.md).
+For detailed implementation plans, see [PLAN.md](docs/PLAN.md).

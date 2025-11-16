@@ -192,7 +192,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed")
 			}
-			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
 
 			By("cleaning up test namespace")
 			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
@@ -345,7 +345,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Syncing"), "Expected bundle status to be Syncing")
 			}
-			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
 
 			By("marking the job as succeeded to simulate successful converge")
 			// Patch job status to mark it as succeeded
@@ -460,7 +460,7 @@ spec:
 			// Phase only becomes Failed after exceeding max retries (6+ failures), which takes ~7+ minutes
 			g.Expect(output).To(Equal("Syncing"), "Expected bundle phase to be Syncing (retrying with exponential backoff)")
 			}
-			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
 
 			By("verifying LastErrorMessage contains relevant error information")
 			verifyErrorMessage := func(g Gomega) {

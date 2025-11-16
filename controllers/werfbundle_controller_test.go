@@ -436,9 +436,11 @@ func TestReconcile_RegistryError_ExponentialBackoff(t *testing.T) {
 				i, expectedFailures, updatedBundle.Status.ConsecutiveFailures)
 		}
 
-		// Verify status is Failed
-		if updatedBundle.Status.Phase != werfv1alpha1.PhaseFailed {
-			t.Errorf("reconcile %d: expected phase Failed, got %s",
+		// Verify status is Syncing during retry attempts (not Failed until max retries exceeded)
+		// Phase is only Failed after ConsecutiveFailures > maxConsecutiveFailures (i.e., 6+ failures)
+		expectedPhase := werfv1alpha1.PhaseSyncing
+		if updatedBundle.Status.Phase != expectedPhase {
+			t.Errorf("reconcile %d: expected phase Syncing (retry attempt), got %s",
 				i, updatedBundle.Status.Phase)
 		}
 	}

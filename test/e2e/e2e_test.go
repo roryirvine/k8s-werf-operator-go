@@ -269,7 +269,7 @@ spec:
 		})
 
 		It("should create job with specified resource limits on successful registry lookup", func() {
-		Skip("Deferred: requires test registry infrastructure setup (testcontainers). See GitHub issue #5.")
+			Skip("Deferred: requires test registry infrastructure setup (testcontainers). See GitHub issue #5.")
 			By("creating a test namespace for the bundle")
 			bundleNS := "werfbundle-test-3"
 			cmd := exec.Command("kubectl", "create", "ns", bundleNS)
@@ -345,7 +345,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Syncing"), "Expected bundle status to be Syncing")
 			}
-			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
 
 			By("marking the job as succeeded to simulate successful converge")
 			// Patch job status to mark it as succeeded
@@ -457,10 +457,10 @@ spec:
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				// Phase should be Syncing during retry attempts (failures 1-5 with exponential backoff)
-			// Phase only becomes Failed after exceeding max retries (6+ failures), which takes ~7+ minutes
-			g.Expect(output).To(Equal("Syncing"), "Expected bundle phase to be Syncing (retrying with exponential backoff)")
+				// Phase only becomes Failed after exceeding max retries (6+ failures), which takes ~7+ minutes
+				g.Expect(output).To(Equal("Syncing"), "Expected bundle phase to be Syncing (retrying with exponential backoff)")
 			}
-			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
 
 			By("verifying LastErrorMessage contains relevant error information")
 			verifyErrorMessage := func(g Gomega) {

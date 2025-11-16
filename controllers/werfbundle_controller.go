@@ -251,7 +251,7 @@ func (r *WerfBundleReconciler) handleRegistryError(
 	log.Info("requeuing with exponential backoff", "backoff", backoff)
 	errMsg := fmt.Sprintf("Registry error (attempt %d/%d): %v",
 		bundle.Status.ConsecutiveFailures, maxConsecutiveFailures, registryErr)
-	if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+	if err := r.updateStatusSyncing(ctx, bundle, errMsg); err != nil {
 		log.Error(err, "failed to update status after registry error")
 		return ctrl.Result{}, err
 	}

@@ -251,15 +251,17 @@ spec:
 			}
 			Eventually(verifyNoJobCreated, 30*time.Second).Should(Succeed())
 
-			By("verifying WerfBundle status is Failed due to registry error")
-			verifyBundleFailed := func(g Gomega) {
+			By("verifying WerfBundle status reflects registry error (in Syncing with exponential backoff retries)")
+			verifyBundleSyncing := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-invalid-registry", "-n", bundleNS,
 					"-o", "jsonpath={.status.phase}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed due to registry error")
+				// Status should be Syncing (retrying with exponential backoff), not Failed
+				// (Failed only occurs after exceeding max retries, which takes ~7+ minutes)
+				g.Expect(output).To(Equal("Syncing"), "Expected bundle status to be Syncing (retrying with exponential backoff)")
 			}
-			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
 
 			By("cleaning up test namespace")
 			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")

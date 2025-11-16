@@ -192,7 +192,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Failed"), "Expected bundle status to be Failed")
 			}
-			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
 
 			By("cleaning up test namespace")
 			cmd = exec.Command("kubectl", "delete", "ns", bundleNS, "--wait=true")
@@ -450,15 +450,17 @@ spec:
 			firstErrorTime = strings.TrimSpace(firstErrorTimeOutput)
 			Expect(firstErrorTime).NotTo(BeEmpty(), "Expected lastErrorTime to be set after first error")
 
-			By("verifying Phase is Failed")
-			verifyBundleFailed := func(g Gomega) {
+			By("verifying Phase is Syncing (retrying with exponential backoff)")
+			verifyBundleSyncing := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-backoff", "-n", bundleNS,
 					"-o", "jsonpath={.status.phase}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Failed"), "Expected bundle phase to be Failed due to repeated registry errors")
+				// Phase should be Syncing during retry attempts (failures 1-5 with exponential backoff)
+			// Phase only becomes Failed after exceeding max retries (6+ failures), which takes ~7+ minutes
+			g.Expect(output).To(Equal("Syncing"), "Expected bundle phase to be Syncing (retrying with exponential backoff)")
 			}
-			Eventually(verifyBundleFailed, 30*time.Second).Should(Succeed())
+			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
 
 			By("verifying LastErrorMessage contains relevant error information")
 			verifyErrorMessage := func(g Gomega) {

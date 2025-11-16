@@ -505,6 +505,7 @@ spec:
 		})
 
 		It("should create new job when ETag cache is invalidated (simulating registry update)", func() {
+			Skip("Deferred: requires test registry infrastructure setup (testcontainers). See GitHub issue #5.")
 			By("creating a test namespace for the bundle")
 			bundleNS := "werfbundle-test-update"
 			cmd := exec.Command("kubectl", "create", "ns", bundleNS)

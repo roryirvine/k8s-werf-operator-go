@@ -150,8 +150,8 @@ When registry polling fails (network errors, timeouts, server errors), the opera
 ### Jitter
 
 To prevent the "thundering herd" problem when multiple bundles are scheduled to poll simultaneously, the operator adds randomness to polling intervals:
-- Jitter: ±20% randomness applied to configured poll intervals
-- Example: `pollInterval: 15m` will actually poll between 12-18 minutes
+- Jitter: ±10% randomness applied to configured poll intervals
+- Example: `pollInterval: 15m` will actually poll between 13.5-16.5 minutes
 - Spreads load across time rather than having all bundles poll at the same moment
 
 ### Configurable Resource Limits

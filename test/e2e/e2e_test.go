@@ -462,18 +462,19 @@ spec:
 			}
 			Eventually(verifyBundleSyncing, 30*time.Second).Should(Succeed())
 
-			By("verifying LastErrorMessage contains relevant error information")
-			verifyErrorMessage := func(g Gomega) {
+			By("verifying lastConsecutiveFailures is incremented (error tracking during retries)")
+			verifyFailureCount := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "werfbundle", "test-bundle-backoff", "-n", bundleNS,
-					"-o", "jsonpath={.status.lastErrorMessage}")
+					"-o", "jsonpath={.status.consecutiveFailures}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).NotTo(BeEmpty(), "Expected lastErrorMessage to be set")
-				// Error message should contain something about registry or connection failure
-				g.Expect(output).To(MatchRegexp(`(?i)(registry|connection|network|failed|error)`),
-					"Expected error message to contain registry/network-related keywords")
+				failures := strings.TrimSpace(output)
+				g.Expect(failures).NotTo(BeEmpty(), "Expected consecutiveFailures to be set during retries")
+				failureCount := 0
+				fmt.Sscanf(failures, "%d", &failureCount)
+				g.Expect(failureCount).To(BeNumerically(">=", 1), "Expected at least 1 consecutive failure")
 			}
-			Eventually(verifyErrorMessage, 30*time.Second).Should(Succeed())
+			Eventually(verifyFailureCount, 30*time.Second).Should(Succeed())
 
 			By("verifying that NO Job was created (registry error prevents job creation)")
 			verifyNoJobCreated := func(g Gomega) {

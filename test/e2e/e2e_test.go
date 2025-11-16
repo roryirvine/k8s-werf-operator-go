@@ -267,6 +267,7 @@ spec:
 		})
 
 		It("should create job with specified resource limits on successful registry lookup", func() {
+		Skip("Deferred: requires test registry infrastructure setup (testcontainers). See GitHub issue #5.")
 			By("creating a test namespace for the bundle")
 			bundleNS := "werfbundle-test-3"
 			cmd := exec.Command("kubectl", "create", "ns", bundleNS)

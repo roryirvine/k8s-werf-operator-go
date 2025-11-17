@@ -3,6 +3,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -23,7 +25,9 @@ import (
 )
 
 const (
-	finalizerName = "werf.io/finalizer"
+	finalizerName          = "werf.io/finalizer"
+	defaultPollInterval    = 15 * time.Minute
+	maxConsecutiveFailures = 5
 )
 
 // WerfBundleReconciler reconciles WerfBundle resources.
@@ -55,6 +59,7 @@ type WerfBundleReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	RegistryClient registry.Client
+	Clientset      kubernetes.Interface
 }
 
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch;update;patch
@@ -62,6 +67,9 @@ type WerfBundleReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;update;get;list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 
 // Reconcile implements the reconciliation loop for WerfBundle.
 func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -101,40 +109,41 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Validate ServiceAccount exists before attempting to create Job
-	saKey := types.NamespacedName{
-		Name:      bundle.Spec.Converge.ServiceAccountName,
-		Namespace: bundle.Namespace,
-	}
-	sa := &corev1.ServiceAccount{}
-	if err := r.Get(ctx, saKey, sa); err != nil {
-		if apierrors.IsNotFound(err) {
-			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
-				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
-			log.Info("ServiceAccount not found", "serviceAccount", saKey)
-			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
-				log.Error(err, "failed to update status after SA validation")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
-		}
-		log.Error(err, "failed to get ServiceAccount")
-		return ctrl.Result{}, err
-	}
-
-	// Poll registry for latest tag
-	// Note: Authentication not yet implemented (Slice 2) - always uses nil for auth
-	latestTag, err := r.RegistryClient.GetLatestTag(ctx, bundle.Spec.Registry.URL, nil)
-	if err != nil {
-		log.Error(err, "failed to get latest tag from registry")
-		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Registry error: %v", err)); err != nil {
-			log.Error(err, "failed to update status after registry error")
-			return ctrl.Result{}, err
-		}
+	if err := r.validateServiceAccount(ctx, bundle); err != nil {
+		// Status was already updated to Failed by validateServiceAccount
+		// Return success (no error) but stop processing further
 		return ctrl.Result{}, nil
 	}
 
+	// Parse poll interval from spec, default to 15 minutes
+	pollInterval := defaultPollInterval
+	if bundle.Spec.Registry.PollInterval != "" {
+		parsed, err := time.ParseDuration(bundle.Spec.Registry.PollInterval)
+		if err != nil {
+			log.Error(err, "invalid pollInterval in spec, using default", "pollInterval", bundle.Spec.Registry.PollInterval)
+		} else {
+			pollInterval = parsed
+		}
+	}
+
+	// Poll registry for latest tags with ETag caching
+	// Note: Authentication not yet implemented (Slice 2) - always uses nil for auth
+	tags, etag, err := r.RegistryClient.ListTagsWithETag(ctx, bundle.Spec.Registry.URL, nil, bundle.Status.LastETag)
+	if err != nil {
+		return r.handleRegistryError(ctx, bundle, err, pollInterval)
+	}
+
+	// Reset consecutive failures on successful registry access
+	if bundle.Status.ConsecutiveFailures > 0 {
+		bundle.Status.ConsecutiveFailures = 0
+		log.Info("registry access successful, resetting failure counter")
+	}
+
+	// Update LastETag for caching
+	bundle.Status.LastETag = etag
+
 	// If no tag found, update status and wait
-	if latestTag == "" {
+	if len(tags) == 0 {
 		log.Info("no tags found in registry")
 		if bundle.Status.Phase == "" || bundle.Status.Phase == werfv1alpha1.PhaseFailed {
 			if err := r.updateStatusSyncing(ctx, bundle, ""); err != nil {
@@ -142,8 +151,13 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, err
 			}
 		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		// Requeue after poll interval + jitter
+		requeueInterval := registry.AddJitter(pollInterval)
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
+
+	// Get the latest tag from the list (lexicographically last)
+	latestTag := tags[len(tags)-1]
 
 	// If latest tag matches what we already deployed, we're done
 	if bundle.Status.LastAppliedTag == latestTag {
@@ -157,7 +171,131 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// New tag found - ensure Job exists and monitor it
+	return r.ensureJobExists(ctx, bundle, latestTag)
+}
+
+// validateServiceAccount checks that the ServiceAccount exists in the bundle's namespace.
+// Returns error if SA doesn't exist or if status update fails. If SA is not found,
+// status is updated to Failed before returning the error to prevent job creation.
+func (r *WerfBundleReconciler) validateServiceAccount(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	saKey := types.NamespacedName{
+		Name:      bundle.Spec.Converge.ServiceAccountName,
+		Namespace: bundle.Namespace,
+	}
+	sa := &corev1.ServiceAccount{}
+	if err := r.Get(ctx, saKey, sa); err != nil {
+		if apierrors.IsNotFound(err) {
+			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
+				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
+			log.Info("ServiceAccount not found", "serviceAccount", saKey)
+			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+				log.Error(err, "failed to update status after SA validation")
+				return err
+			}
+			// Return a sentinel error to stop processing and prevent job creation
+			return errors.New("serviceaccount not found")
+		}
+		log.Error(err, "failed to get ServiceAccount")
+		return err
+	}
+	return nil
+}
+
+// handleRegistryError handles registry polling errors with retry logic and exponential backoff.
+// Returns early with a requeue result if the error should be retried.
+// Returns nil, nil if max retries exceeded (stop retrying but don't propagate error).
+func (r *WerfBundleReconciler) handleRegistryError(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	registryErr error,
+	pollInterval time.Duration,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	var notModified *registry.NotModifiedError
+	if errors.As(registryErr, &notModified) {
+		// Content hasn't changed - cached response is still valid
+		// Requeue after poll interval + jitter to check again later
+		log.Info("registry content unchanged (cached ETag valid)")
+		requeueInterval := registry.AddJitter(pollInterval)
+		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+	}
+
+	// Registry error - implement retry logic with exponential backoff
+	bundle.Status.ConsecutiveFailures++
+	now := metav1.Now()
+	bundle.Status.LastErrorTime = &now
+	log.Info("registry poll failed, incrementing retry counter",
+		"failures", bundle.Status.ConsecutiveFailures,
+		"maxRetries", maxConsecutiveFailures)
+
+	// Check if we've exceeded max retries (allow up to maxConsecutiveFailures attempts)
+	if bundle.Status.ConsecutiveFailures > maxConsecutiveFailures {
+		log.Info("max consecutive failures reached, marking bundle as Failed")
+		errMsg := fmt.Sprintf("Registry error after %d retries: %v",
+			maxConsecutiveFailures, registryErr)
+		if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
+			log.Error(err, "failed to update status after max retries exceeded")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Calculate backoff and requeue
+	backoff := registry.CalculateBackoff(bundle.Status.ConsecutiveFailures)
+	log.Info("requeuing with exponential backoff", "backoff", backoff)
+	errMsg := fmt.Sprintf("Registry error (attempt %d/%d): %v",
+		bundle.Status.ConsecutiveFailures, maxConsecutiveFailures, registryErr)
+	if err := r.updateStatusSyncing(ctx, bundle, errMsg); err != nil {
+		log.Error(err, "failed to update status after registry error")
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: backoff}, nil
+}
+
+// ensureJobExists builds a Job for the given tag, creates it if it doesn't exist,
+// and monitors its status for completion.
+// Implements deduplication by tracking the active job name in Status.
+// Returns a requeue result if the Job is still running.
+// Returns nil, nil if the Job succeeds or fails.
+func (r *WerfBundleReconciler) ensureJobExists(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	latestTag string,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
 	log.Info("new tag found, ensuring converge job exists", "tag", latestTag)
+
+	// Check if we already have an active job running (deduplication)
+	if bundle.Status.ActiveJobName != "" {
+		jobKey := types.NamespacedName{
+			Name:      bundle.Status.ActiveJobName,
+			Namespace: bundle.Namespace,
+		}
+		activeJob := &batchv1.Job{}
+		if err := r.Get(ctx, jobKey, activeJob); err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "failed to fetch active job", "jobName", bundle.Status.ActiveJobName)
+				return ctrl.Result{}, err
+			}
+			// Active job not found, clear it from status and proceed to create new one
+			log.Info("active job no longer exists, clearing from status", "jobName", bundle.Status.ActiveJobName)
+			bundle.Status.ActiveJobName = ""
+		} else {
+			// Active job still exists, just monitor it instead of creating a new one
+			log.Info("active job already running, deferring new tag until job completes",
+				"jobName", activeJob.Name, "newTag", latestTag)
+			return r.monitorJobCompletion(ctx, bundle, activeJob, latestTag)
+		}
+	}
+
+	// No active job, update status to Syncing and build new job spec
 	if err := r.updateStatusSyncing(ctx, bundle, latestTag); err != nil {
 		log.Error(err, "failed to update status to Syncing")
 		return ctrl.Result{}, err
@@ -175,35 +313,62 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	// Check if Job already exists before creating
-	jobKey := types.NamespacedName{
-		Name:      jobSpec.Name,
-		Namespace: jobSpec.Namespace,
-	}
-	existingJob := &batchv1.Job{}
-	jobExists := r.Get(ctx, jobKey, existingJob) == nil
-
-	if !jobExists {
-		// Job doesn't exist, create it
-		if err := r.Create(ctx, jobSpec); err != nil {
-			log.Error(err, "failed to create Job")
-			if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
-				log.Error(err, "failed to update status after job creation failure")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
+	// Create the Job and track it in status
+	if err := r.Create(ctx, jobSpec); err != nil {
+		log.Error(err, "failed to create Job")
+		if err := r.updateStatusFailed(ctx, bundle,
+			fmt.Sprintf("Failed to create Job: %v", err)); err != nil {
+			log.Error(err, "failed to update status after job creation failure")
+			return ctrl.Result{}, err
 		}
-		log.Info("Job created successfully", "jobName", jobSpec.Name)
-		// Job just created, give it time to start
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		return ctrl.Result{}, nil
 	}
 
-	// Job exists, monitor it for completion
-	log.Info("Job already exists, monitoring status", "jobName", existingJob.Name)
+	log.Info("Job created successfully", "jobName", jobSpec.Name)
+
+	// Track active job in status for deduplication
+	bundle.Status.ActiveJobName = jobSpec.Name
+	bundle.Status.LastJobStatus = werfv1alpha1.JobStatusRunning
+	if err := r.Status().Update(ctx, bundle); err != nil {
+		log.Error(err, "failed to update status with active job name")
+		return ctrl.Result{}, err
+	}
+
+	// Job just created, give it time to start
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// monitorJobCompletion checks the status of a running job and updates bundle status accordingly.
+// Returns a requeue result if the job is still running.
+// Returns nil, nil if the job completes (success or failure).
+func (r *WerfBundleReconciler) monitorJobCompletion(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	job *batchv1.Job,
+	latestTag string,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
 
 	// Check Job status
-	if existingJob.Status.Succeeded > 0 {
-		log.Info("Job succeeded, updating status to Synced", "tag", latestTag)
+	if job.Status.Succeeded > 0 {
+		log.Info("Job succeeded, updating status to Synced", "tag", latestTag, "jobName", job.Name)
+		bundle.Status.LastJobStatus = werfv1alpha1.JobStatusSucceeded
+		bundle.Status.ActiveJobName = ""
+
+		// Capture job logs for debugging
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		if err != nil {
+			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
+		} else {
+			// Store logs in status or ConfigMap
+			statusLogs, err := r.storeJobLogs(ctx, bundle, job.Name, jobLogs)
+			if err != nil {
+				log.Error(err, "failed to store job logs, continuing without logs", "jobName", job.Name)
+			} else {
+				bundle.Status.LastJobLogs = statusLogs
+			}
+		}
+
 		if err := r.updateStatusSynced(ctx, bundle, latestTag); err != nil {
 			log.Error(err, "failed to update status after job success")
 			return ctrl.Result{}, err
@@ -211,9 +376,27 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	if existingJob.Status.Failed > 0 {
-		log.Info("Job failed", "jobName", existingJob.Name)
-		if err := r.updateStatusFailed(ctx, bundle, "Job failed, see job logs for details"); err != nil {
+	if job.Status.Failed > 0 {
+		log.Info("Job failed", "jobName", job.Name)
+		bundle.Status.LastJobStatus = werfv1alpha1.JobStatusFailed
+		bundle.Status.ActiveJobName = ""
+
+		// Capture job logs for debugging
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		if err != nil {
+			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
+		} else {
+			// Store logs in status or ConfigMap
+			statusLogs, err := r.storeJobLogs(ctx, bundle, job.Name, jobLogs)
+			if err != nil {
+				log.Error(err, "failed to store job logs, continuing without logs", "jobName", job.Name)
+			} else {
+				bundle.Status.LastJobLogs = statusLogs
+			}
+		}
+
+		if err := r.updateStatusFailed(ctx, bundle,
+			"Job failed, see job logs for details"); err != nil {
 			log.Error(err, "failed to update status after job failure")
 			return ctrl.Result{}, err
 		}
@@ -221,7 +404,7 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Job is still running, requeue to check again
-	log.Info("Job is still running, will recheck on next sync", "jobName", existingJob.Name)
+	log.Info("Job is still running, will recheck on next sync", "jobName", job.Name)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
@@ -271,8 +454,69 @@ func (r *WerfBundleReconciler) updateStatusFailed(
 	return r.Status().Update(ctx, bundle)
 }
 
+// storeJobLogs stores job logs in bundle status or ConfigMap if too large.
+// Returns logs suitable for status field (up to 5KB) and whether full logs were stored in ConfigMap.
+// Logs larger than 1MB are truncated during capture to prevent API rejection.
+func (r *WerfBundleReconciler) storeJobLogs(
+	ctx context.Context,
+	bundle *werfv1alpha1.WerfBundle,
+	jobName string,
+	logs string,
+) (statusLogs string, err error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// If logs fit in status field (5KB), store directly
+	if len(logs) <= 5120 {
+		return logs, nil
+	}
+
+	// Logs are too large for status field, store in ConfigMap
+	configMapName := fmt.Sprintf("%s-logs", jobName)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: bundle.Namespace,
+		},
+		Data: map[string]string{
+			"output": logs,
+		},
+	}
+
+	// Set owner reference for automatic cleanup
+	if err := controllerutil.SetControllerReference(bundle, cm, r.Scheme); err != nil {
+		log.Error(err, "failed to set controller reference on log ConfigMap")
+		return "", err
+	}
+
+	// Create or update the ConfigMap
+	if err := r.Create(ctx, cm); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// ConfigMap exists, update it
+			if err := r.Update(ctx, cm); err != nil {
+				log.Error(err, "failed to update log ConfigMap", "configMap", configMapName)
+				return "", err
+			}
+		} else {
+			log.Error(err, "failed to create log ConfigMap", "configMap", configMapName)
+			return "", err
+		}
+	}
+
+	// Return a reference to the ConfigMap for the status field
+	return fmt.Sprintf("See ConfigMap %s for full logs", configMapName), nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *WerfBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Initialize Kubernetes clientset for pod log access
+	if r.Clientset == nil {
+		clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			return fmt.Errorf("failed to create Kubernetes clientset: %w", err)
+		}
+		r.Clientset = clientset
+	}
+
 	// Ignore status subresource updates to avoid infinite reconciliation
 	pred := predicate.GenerationChangedPredicate{}
 

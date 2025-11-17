@@ -28,6 +28,13 @@ const (
 	PhaseFailed  = "Failed"
 )
 
+// Job status constants
+const (
+	JobStatusRunning   = "Running"
+	JobStatusSucceeded = "Succeeded"
+	JobStatusFailed    = "Failed"
+)
+
 // WerfBundleSpec defines the desired state of WerfBundle.
 // Example:
 //
@@ -81,6 +88,30 @@ type ConvergeConfig struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	ServiceAccountName string `json:"serviceAccountName"`
+
+	// ResourceLimits specifies CPU and memory limits for werf converge jobs.
+	// If not specified, defaults are used: 1 CPU and 1Gi memory.
+	// +kubebuilder:validation:Optional
+	ResourceLimits *ResourceLimitsConfig `json:"resourceLimits,omitempty"`
+
+	// LogRetentionDays specifies how many days completed jobs should be retained.
+	// After this period, jobs are automatically cleaned up by Kubernetes.
+	// If not specified, defaults to 7 days.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default:=7
+	LogRetentionDays *int32 `json:"logRetentionDays,omitempty"`
+}
+
+// ResourceLimitsConfig specifies CPU and memory limits for jobs.
+type ResourceLimitsConfig struct {
+	// CPU is the CPU limit as a string (e.g., "500m", "2", "1.5").
+	// +kubebuilder:validation:Optional
+	CPU string `json:"cpu,omitempty"`
+
+	// Memory is the memory limit as a string (e.g., "512Mi", "1Gi", "2G").
+	// +kubebuilder:validation:Optional
+	Memory string `json:"memory,omitempty"`
 }
 
 // WerfBundleStatus defines the observed state of WerfBundle.
@@ -100,6 +131,42 @@ type WerfBundleStatus struct {
 	// LastErrorMessage is the last error encountered, or empty string if no error.
 	// +kubebuilder:validation:Optional
 	LastErrorMessage string `json:"lastErrorMessage,omitempty"`
+
+	// LastETag is the ETag from the last successful registry response.
+	// Used for ETag-based caching to avoid re-downloading unchanged tag lists.
+	// +kubebuilder:validation:Optional
+	LastETag string `json:"lastETag,omitempty"`
+
+	// ConsecutiveFailures is the number of consecutive registry polling failures.
+	// Used to calculate exponential backoff. Reset to 0 on success.
+	// Marked Failed if ConsecutiveFailures > 5 (after 6th consecutive error).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=6
+	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`
+
+	// LastErrorTime is the timestamp of the last error encountered.
+	// Used to calculate backoff intervals for retries.
+	// +kubebuilder:validation:Optional
+	LastErrorTime *metav1.Time `json:"lastErrorTime,omitempty"`
+
+	// ActiveJobName is the name of the currently active job running werf converge.
+	// Set when a job is created, cleared when the job completes or fails.
+	// Used for deduplication to prevent multiple jobs for the same bundle version.
+	// +kubebuilder:validation:Optional
+	ActiveJobName string `json:"activeJobName,omitempty"`
+
+	// LastJobStatus is the status of the most recent job (Succeeded, Failed, Running).
+	// Provides quick visibility into the last deployment attempt without listing jobs separately.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Succeeded;Failed;Running
+	LastJobStatus string `json:"lastJobStatus,omitempty"`
+
+	// LastJobLogs are the captured logs from the most recent job (tail of output).
+	// Limited to ~5KB to fit in Status; larger logs are stored in a ConfigMap instead.
+	// Provides debugging visibility without requiring external log aggregation.
+	// +kubebuilder:validation:Optional
+	LastJobLogs string `json:"lastJobLogs,omitempty"`
 }
 
 // +kubebuilder:object:root=true

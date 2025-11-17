@@ -4,15 +4,19 @@ A Kubernetes operator for deploying and managing applications packaged with [Wer
 
 ## Current Status
 
-**Slice 1 - Basic Bundle Deployment** (Alpha)
+**Slice 2 - Enhanced Registry Integration** (Alpha)
 
-This is early-stage software (v1alpha1 API). The operator supports basic bundle deployment with the following functionality:
+This is early-stage software (v1alpha1 API). The operator supports bundle deployment with robust registry polling and configurable resource management.
+
+### What works now
 
 - Watch for `WerfBundle` custom resources in the cluster
 - Poll OCI registries for available bundle tags
-- Create Kubernetes Jobs to run `werf converge` deployments
+- Robust registry polling with ETag caching and exponential backoff for reliability
+- Create Kubernetes Jobs to run `werf converge` deployments with configurable resource limits
 - Track deployment status in the WerfBundle resource
 - Proper RBAC separation (operator minimal, job permissions namespace-scoped)
+- Capture and retain deployment job logs for troubleshooting
 
 **What does NOT work yet:**
 - Semantic versioning (tags are sorted lexicographically, not by semver)
@@ -22,7 +26,7 @@ This is early-stage software (v1alpha1 API). The operator supports basic bundle 
 - Helm integration
 - Custom value overrides
 
-See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
+See [PLAN.md](docs/PLAN.md) for the full roadmap including Slice 3+.
 
 ## Quick Start
 
@@ -109,6 +113,9 @@ See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
        pollInterval: 15m
      converge:
        serviceAccountName: werf-converge
+       resourceLimits:
+         cpu: "2"
+         memory: "2Gi"
    EOF
    ```
 
@@ -119,6 +126,48 @@ See [Slices 2-5 in PLAN.md](docs/PLAN.md) for the full roadmap.
    kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
    kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
    ```
+
+## Reliability Features
+
+The operator includes several built-in features to ensure robust registry polling and reliable deployment:
+
+### ETag Caching
+
+The operator uses HTTP ETag caching to minimize registry requests and save bandwidth. When polling for new bundle versions:
+- First poll requests the full tag list and stores the ETag response header
+- Subsequent polls include the ETag in the `If-None-Match` header
+- If content hasn't changed, the registry responds with HTTP 304 (Not Modified), saving bandwidth
+- This is particularly valuable for large registries or frequent polling intervals
+
+### Exponential Backoff
+
+When registry polling fails (network errors, timeouts, server errors), the operator automatically retries with exponential backoff:
+- Retry attempts: Up to 5 consecutive failures before marking the bundle as failed
+- Backoff sequence: 30s → 1m → 2m → 4m → 8m
+- Each failure increments a counter in the WerfBundle status (`status.consecutiveFailures`)
+- Manual intervention or registry recovery will reset the counter
+
+### Jitter
+
+To prevent the "thundering herd" problem when multiple bundles are scheduled to poll simultaneously, the operator adds randomness to polling intervals:
+- Jitter: ±10% randomness applied to configured poll intervals
+- Example: `pollInterval: 15m` will actually poll between 13.5-16.5 minutes
+- Spreads load across time rather than having all bundles poll at the same moment
+
+### Configurable Resource Limits
+
+Jobs that run `werf converge` can consume significant resources. Configure limits to prevent cluster disruption:
+- Default limits: 1 CPU, 1Gi memory
+- Example: `resourceLimits: {cpu: "2", memory: "2Gi"}`
+- Recommended for production: Match expected Werf workload requirements
+- Jobs that exceed memory limits will be killed; check pod logs for `OOMKilled` status
+
+### Job Logs Retention
+
+Deployment logs are automatically captured and retained in the WerfBundle status for troubleshooting:
+- Default retention: 7 days (configurable via `logRetentionDays`)
+- Logs are captured from the completed Job pod
+- Useful for debugging failed deployments without accessing the cluster directly
 
 ## Running Tests
 
@@ -159,32 +208,29 @@ This will:
 
 - **[DESIGN.md](docs/DESIGN.md)** - Architecture and design decisions
 - **[PLAN.md](docs/PLAN.md)** - Implementation roadmap for all slices
+- **[Configuration Reference](docs/configuration.md)** - Detailed configuration field documentation, defaults, and reliability features
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Diagnostic procedures and solutions for common issues
 - **[RBAC Setup](docs/job-rbac.md)** - Detailed RBAC configuration guide
 
 ## Troubleshooting
 
-### Bundle stuck in "Syncing" state
+For common issues and diagnostic procedures, see the [Troubleshooting Guide](docs/troubleshooting.md).
 
-- Check ServiceAccount exists in target namespace:
-  ```bash
-  kubectl get sa werf-converge -n <target-namespace>
-  ```
-- Check operator logs for errors:
-  ```bash
-  kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
-  ```
+Quick reference for the most common issues:
 
-### Registry connection fails
+**Bundle stuck in Syncing**
+- Check `status.consecutiveFailures` and `status.lastErrorMessage`
+- Verify registry URL is accessible: `kubectl describe werfbundle my-app -n k8s-werf-operator-go-system`
+- Check operator logs: `kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager`
 
-- Verify registry URL is correct and accessible
-- Check network connectivity from operator pod
-- For private registries, credentials must be configured (Slice 2 feature)
+**Job fails with OOMKilled**
+- Increase memory limits: `kubectl patch werfbundle my-app --type merge -p '{"spec":{"converge":{"resourceLimits":{"memory":"2Gi"}}}}'`
 
-### Job not running
+**Jobs not being created**
+- Verify ServiceAccount exists in target namespace: `kubectl get sa werf-converge -n <namespace>`
+- Check permissions: ServiceAccount must have access to create resources
 
-- Check if werf image is available: `werf:latest` from `ghcr.io/werf/werf`
-- Verify ServiceAccount has permissions to create necessary resources
-- Check Job logs: `kubectl logs job/<job-name> -n <namespace>`
+For detailed troubleshooting procedures, error message explanations, and advanced debugging, see the [Troubleshooting Guide](docs/troubleshooting.md).
 
 ## Development
 
@@ -232,11 +278,11 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 ## Next Steps
 
-What's coming in Slice 2 and beyond:
+Current roadmap:
 
-- **Slice 2:** Enhanced registry integration with ETag caching, exponential backoff, and improved error handling
-- **Slice 3:** Values management and multi-namespace support
+- **Slice 2:** ✓ Enhanced registry integration with ETag caching, exponential backoff, and configurable resource management (complete)
+- **Slice 3:** Values management and cross-namespace deployments
 - **Slice 4:** Drift detection and automatic correction
 - **Slice 5:** Advanced features including semantic versioning and username/password auth
 
-Current plans and implementation details are in [PLAN.md](docs/PLAN.md).
+For detailed implementation plans, see [PLAN.md](docs/PLAN.md).

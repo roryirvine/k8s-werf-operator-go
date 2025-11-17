@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -14,6 +15,7 @@ import (
 )
 
 var testk8sClient client.Client
+var testK8sClientset kubernetes.Interface
 var testEnv *envtest.Environment
 
 func TestMain(m *testing.M) {
@@ -33,6 +35,11 @@ func TestMain(m *testing.M) {
 	}
 
 	testk8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	if err != nil {
+		panic(err)
+	}
+
+	testK8sClientset, err = kubernetes.NewForConfig(cfg)
 	if err != nil {
 		panic(err)
 	}

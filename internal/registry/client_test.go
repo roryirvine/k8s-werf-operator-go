@@ -60,6 +60,31 @@ func (f *FakeClient) GetLatestTag(ctx context.Context, repoURL string, auth inte
 	return tags[len(tags)-1], nil
 }
 
+// ListTagsWithETag returns tags with ETag support.
+// Simulates HTTP ETag behavior by generating a deterministic ETag based on tag content.
+func (f *FakeClient) ListTagsWithETag(
+	ctx context.Context,
+	repoURL string,
+	auth interface{},
+	lastETag string,
+) ([]string, string, error) {
+	tags, err := f.ListTags(ctx, repoURL, auth)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Generate a simple deterministic ETag for these tags
+	// In real HTTP, this comes from response headers; we simulate it here
+	currentETag := GenerateFakeETag(tags)
+
+	// If ETag matches, return NotModifiedError (simulating HTTP 304)
+	if lastETag != "" && currentETag == lastETag {
+		return nil, currentETag, &NotModifiedError{}
+	}
+
+	return tags, currentETag, nil
+}
+
 func TestListTags_InvalidURL(t *testing.T) {
 	client := NewOCIClient()
 	ctx := context.Background()
@@ -245,5 +270,159 @@ func TestGetLatestTag_ErrorHandling(t *testing.T) {
 				t.Errorf("wantErr %v, got err %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestListTagsWithETag(t *testing.T) {
+	tests := []struct {
+		name              string
+		tags              []string
+		lastETag          string
+		expectNotModified bool
+		expectError       bool
+		desc              string
+	}{
+		{
+			name:              "first request (no lastETag)",
+			tags:              []string{"v1.0.0", "v1.1.0"},
+			lastETag:          "",
+			expectNotModified: false,
+			expectError:       false,
+			desc:              "First request returns tags and new ETag",
+		},
+		{
+			name:              "second request (same tags, matching ETag)",
+			tags:              []string{"v1.0.0", "v1.1.0"},
+			lastETag:          "", // Will be filled with calculated ETag
+			expectNotModified: true,
+			expectError:       false,
+			desc:              "Same tags should return NotModifiedError with matching ETag",
+		},
+		{
+			name:              "tags changed",
+			tags:              []string{"v1.0.0", "v1.1.0", "v1.2.0"},
+			lastETag:          "oldETagValue1234",
+			expectNotModified: false,
+			expectError:       false,
+			desc:              "New tag added, ETag should be different",
+		},
+		{
+			name:              "empty repository",
+			tags:              []string{},
+			lastETag:          "",
+			expectNotModified: false,
+			expectError:       false,
+			desc:              "Empty repository returns empty tag list",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewFakeClient()
+			client.SetTags("test-repo", tt.tags)
+			ctx := context.Background()
+
+			// For the "same tags" test, first calculate the ETag
+			if tt.name == "second request (same tags, matching ETag)" {
+				_, etag, _ := client.ListTagsWithETag(ctx, "test-repo", nil, "")
+				tt.lastETag = etag
+			}
+
+			tags, etag, err := client.ListTagsWithETag(ctx, "test-repo", nil, tt.lastETag)
+
+			// Check error
+			if tt.expectNotModified {
+				_, isNotModified := err.(*NotModifiedError)
+				if !isNotModified {
+					t.Errorf("expected NotModifiedError, got %v", err)
+				}
+				if tags != nil {
+					t.Errorf("expected nil tags on NotModifiedError, got %v", tags)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if len(tags) != len(tt.tags) {
+					t.Errorf("tag count mismatch: got %d, want %d", len(tags), len(tt.tags))
+				}
+			}
+
+			// ETag should always be returned
+			if etag == "" && len(tt.tags) > 0 {
+				t.Errorf("expected non-empty ETag for non-empty tag list")
+			}
+		})
+	}
+}
+
+func TestETagConsistency(t *testing.T) {
+	// Verify that same tags always produce same ETag
+	tags := []string{"v1.2.0", "v1.0.0", "v1.1.0"}
+	client := NewFakeClient()
+	client.SetTags("test-repo", tags)
+	ctx := context.Background()
+
+	// First request
+	_, etag1, _ := client.ListTagsWithETag(ctx, "test-repo", nil, "")
+
+	// Second request with same tags (order might be different in input)
+	_, etag2, _ := client.ListTagsWithETag(ctx, "test-repo", nil, "")
+
+	if etag1 != etag2 {
+		t.Errorf("same tags produced different ETags: %s vs %s", etag1, etag2)
+	}
+
+	// Third request with same lastETag should return NotModifiedError
+	_, etag3, err := client.ListTagsWithETag(ctx, "test-repo", nil, etag1)
+	_, isNotModified := err.(*NotModifiedError)
+	if !isNotModified {
+		t.Errorf("expected NotModifiedError on matching ETag, got %v", err)
+	}
+	if etag3 != etag1 {
+		t.Errorf("ETag should remain same on NotModifiedError")
+	}
+}
+
+func TestListTagsWithETag_NotFoundError(t *testing.T) {
+	// Verify that NotFoundError is returned when repository doesn't exist
+	client := NewFakeClient()
+	notFoundErr := &NotFoundError{Err: fmt.Errorf("HTTP 404: Not Found")}
+	client.SetError("missing-repo", notFoundErr)
+	ctx := context.Background()
+
+	tags, etag, err := client.ListTagsWithETag(ctx, "missing-repo", nil, "")
+
+	// Should return the NotFoundError
+	if err != notFoundErr {
+		t.Errorf("expected NotFoundError, got %T: %v", err, err)
+	}
+
+	// Tags and ETag should be empty/nil
+	if tags != nil {
+		t.Errorf("expected nil tags on NotFoundError, got %v", tags)
+	}
+	if etag != "" {
+		t.Errorf("expected empty ETag on NotFoundError, got %q", etag)
+	}
+}
+
+func TestGetLatestTag_NotFoundError(t *testing.T) {
+	// Verify that NotFoundError is propagated from ListTags
+	client := NewFakeClient()
+	notFoundErr := &NotFoundError{Err: fmt.Errorf("HTTP 404: Not Found")}
+	client.SetError("missing-repo", notFoundErr)
+	ctx := context.Background()
+
+	tag, err := client.GetLatestTag(ctx, "missing-repo", nil)
+
+	// Should return the NotFoundError
+	if err != notFoundErr {
+		t.Errorf("expected NotFoundError, got %T: %v", err, err)
+	}
+
+	// Tag should be empty
+	if tag != "" {
+		t.Errorf("expected empty tag on NotFoundError, got %q", tag)
 	}
 }

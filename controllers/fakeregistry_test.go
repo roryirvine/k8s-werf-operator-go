@@ -68,5 +68,28 @@ func (f *FakeRegistry) GetLatestTag(ctx context.Context, repoURL string, auth au
 	return tags[len(tags)-1], nil
 }
 
+// ListTagsWithETag returns tags with ETag support for testing.
+func (f *FakeRegistry) ListTagsWithETag(
+	ctx context.Context,
+	repoURL string,
+	auth authn.Authenticator,
+	lastETag string,
+) ([]string, string, error) {
+	tags, err := f.ListTags(ctx, repoURL, auth)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Use the same ETag generation as the registry package
+	currentETag := registry.GenerateFakeETag(tags)
+
+	// If ETag matches, return NotModifiedError
+	if lastETag != "" && currentETag == lastETag {
+		return nil, currentETag, &registry.NotModifiedError{}
+	}
+
+	return tags, currentETag, nil
+}
+
 // Verify that FakeRegistry implements registry.Client
 var _ registry.Client = (*FakeRegistry)(nil)

@@ -529,10 +529,10 @@ Add robust registry handling and job management.
     - Alternative: Fixed interval retry would overwhelm failing systems or waste time on permanent failures
     - Max retries prevents infinite retry loops - after 5 failures, mark bundle as Failed
 
-  3. **Jitter for poll intervals**: Add random 0-20% jitter to configured pollInterval
+  3. **Jitter for poll intervals**: Add random ±10% jitter to configured pollInterval
     - Why: Prevents all bundles polling simultaneously (thundering herd), spreads load
     - Alternative: Fixed intervals would cause spikes every N minutes as all bundles poll together
-    - Example: 15min interval becomes 12-18min randomly per bundle
+    - Example: 15min interval becomes 13.5-16.5min randomly per bundle
 
   4. **Separate retry state from poll interval**: Track retry attempts in Status separate from normal polls
     - Why: Retry after failure is different concern than scheduled polling - don't conflate them
@@ -568,7 +568,7 @@ You need 4 components:
     - Function: `CalculateNextPoll(consecutiveFailures int32, baseInterval time.Duration) time.Duration`
     - Formula: `baseInterval * 2^consecutiveFailures` with cap at 30 minutes
     - For failures: 30s, 1m, 2m, 4m, 8m (then give up)
-    - Separate function: `AddJitter(interval time.Duration) time.Duration` adds 0-20% random
+    - Separate function: `AddJitter(interval time.Duration) time.Duration` adds ±10% random
 
   4. **Reconciler updates**: Update controllers/werfbundle_controller.go
     - Call ListTagsWithETag with status.LastETag
@@ -846,7 +846,7 @@ You need 3 components:
     - Document `resourceLimits` field: defaults (1 CPU, 1Gi), recommended values for different workload sizes
     - Document `logRetentionDays` field: default (7), affects job TTL
     - Explain retry behavior: 5 max retries, exponential backoff (30s to 8m)
-    - Explain jitter: adds 0-20% randomness to poll intervals
+    - Explain jitter: adds ±10% randomness to poll intervals
 
   3. **Troubleshooting guide**: Create docs/troubleshooting.md
     - "Bundle stuck in Syncing" → Check ConsecutiveFailures in status, may be in backoff

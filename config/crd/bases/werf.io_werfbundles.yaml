@@ -60,6 +60,29 @@ spec:
                 description: Converge contains configuration for deploying the bundle
                   with werf converge.
                 properties:
+                  logRetentionDays:
+                    default: 7
+                    description: |-
+                      LogRetentionDays specifies how many days completed jobs should be retained.
+                      After this period, jobs are automatically cleaned up by Kubernetes.
+                      If not specified, defaults to 7 days.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  resourceLimits:
+                    description: |-
+                      ResourceLimits specifies CPU and memory limits for werf converge jobs.
+                      If not specified, defaults are used: 1 CPU and 1Gi memory.
+                    properties:
+                      cpu:
+                        description: CPU is the CPU limit as a string (e.g., "500m",
+                          "2", "1.5").
+                        type: string
+                      memory:
+                        description: Memory is the memory limit as a string (e.g.,
+                          "512Mi", "1Gi", "2G").
+                        type: string
+                    type: object
                   serviceAccountName:
                     description: |-
                       ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
@@ -110,12 +133,53 @@ spec:
           status:
             description: WerfBundleStatus defines the observed state of WerfBundle.
             properties:
+              activeJobName:
+                description: |-
+                  ActiveJobName is the name of the currently active job running werf converge.
+                  Set when a job is created, cleared when the job completes or fails.
+                  Used for deduplication to prevent multiple jobs for the same bundle version.
+                type: string
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures is the number of consecutive registry polling failures.
+                  Used to calculate exponential backoff. Reset to 0 on success.
+                  Marked Failed if ConsecutiveFailures > 5 (after 6th consecutive error).
+                format: int32
+                maximum: 6
+                minimum: 0
+                type: integer
               lastAppliedTag:
                 description: LastAppliedTag is the last successfully deployed tag.
+                type: string
+              lastETag:
+                description: |-
+                  LastETag is the ETag from the last successful registry response.
+                  Used for ETag-based caching to avoid re-downloading unchanged tag lists.
                 type: string
               lastErrorMessage:
                 description: LastErrorMessage is the last error encountered, or empty
                   string if no error.
+                type: string
+              lastErrorTime:
+                description: |-
+                  LastErrorTime is the timestamp of the last error encountered.
+                  Used to calculate backoff intervals for retries.
+                format: date-time
+                type: string
+              lastJobLogs:
+                description: |-
+                  LastJobLogs are the captured logs from the most recent job (tail of output).
+                  Limited to ~5KB to fit in Status; larger logs are stored in a ConfigMap instead.
+                  Provides debugging visibility without requiring external log aggregation.
+                type: string
+              lastJobStatus:
+                description: |-
+                  LastJobStatus is the status of the most recent job (Succeeded, Failed, Running).
+                  Provides quick visibility into the last deployment attempt without listing jobs separately.
+                enum:
+                - Succeeded
+                - Failed
+                - Running
                 type: string
               lastSyncTime:
                 description: LastSyncTime is the timestamp of the last successful

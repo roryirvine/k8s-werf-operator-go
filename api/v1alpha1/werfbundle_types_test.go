@@ -74,6 +74,31 @@ func TestWerfBundleCreation(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid WerfBundle with retry tracking fields (Slice 2)",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle-retry",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
+				},
+				Status: WerfBundleStatus{
+					Phase:               "Syncing",
+					LastETag:            "abc123def456",
+					ConsecutiveFailures: 2,
+					LastErrorTime:       &metav1.Time{Time: metav1.Now().Time},
+					LastErrorMessage:    "temporary network error",
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

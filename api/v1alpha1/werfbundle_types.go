@@ -125,7 +125,7 @@ type ResourceLimitsConfig struct {
 // The entire ConfigMap or Secret is treated as YAML data and merged with other sources.
 // Values are passed to werf converge as --set flags.
 // Exactly one of ConfigMapRef or SecretRef must be set.
-// +kubebuilder:validation:XValidation:rule="[has(self.configMapRef), has(self.secretRef)].filter(x, x).size() == 1",message="exactly one of configMapRef or secretRef must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.configMapRef) && !has(self.secretRef)) || (!has(self.configMapRef) && has(self.secretRef))",message="exactly one of configMapRef or secretRef must be set"
 type ValuesSource struct {
 	// ConfigMapRef is a reference to a ConfigMap containing values as YAML data.
 	// The ConfigMap is looked up first in the WerfBundle's namespace, then in the target namespace.

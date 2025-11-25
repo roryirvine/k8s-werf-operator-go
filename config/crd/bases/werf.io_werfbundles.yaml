@@ -145,8 +145,8 @@ spec:
                       x-kubernetes-validations:
                       - message: exactly one of configMapRef or secretRef must be
                           set
-                        rule: '[has(self.configMapRef), has(self.secretRef)].filter(x,
-                          x).size() == 1'
+                        rule: (has(self.configMapRef) && !has(self.secretRef)) ||
+                          (!has(self.configMapRef) && has(self.secretRef))
                     type: array
                 required:
                 - serviceAccountName

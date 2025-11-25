@@ -114,6 +114,30 @@ type ResourceLimitsConfig struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// ValuesSource represents a source of configuration values for werf converge.
+// The entire ConfigMap or Secret is treated as YAML data and merged with other sources.
+// Values are passed to werf converge as --set flags.
+// Exactly one of ConfigMapRef or SecretRef must be set.
+// +kubebuilder:validation:XValidation:rule="[has(self.configMapRef), has(self.secretRef)].filter(x, x).size() == 1",message="exactly one of configMapRef or secretRef must be set"
+type ValuesSource struct {
+	// ConfigMapRef is a reference to a ConfigMap containing values as YAML data.
+	// The ConfigMap is looked up first in the WerfBundle's namespace, then in the target namespace.
+	// +kubebuilder:validation:Optional
+	ConfigMapRef *corev1.LocalObjectReference `json:"configMapRef,omitempty"`
+
+	// SecretRef is a reference to a Secret containing values as YAML data.
+	// The Secret is looked up first in the WerfBundle's namespace, then in the target namespace.
+	// +kubebuilder:validation:Optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// Optional specifies whether this values source is required.
+	// If false (default), the deployment fails if the ConfigMap or Secret is not found.
+	// If true, the deployment proceeds even if the resource is missing.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=false
+	Optional bool `json:"optional,omitempty"`
+}
+
 // WerfBundleStatus defines the observed state of WerfBundle.
 type WerfBundleStatus struct {
 	// Phase is the current phase of the bundle (Syncing, Synced, Failed).

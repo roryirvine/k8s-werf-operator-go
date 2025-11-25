@@ -101,6 +101,13 @@ type ConvergeConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default:=7
 	LogRetentionDays *int32 `json:"logRetentionDays,omitempty"`
+
+	// ValuesFrom is a list of sources to populate configuration values for werf converge.
+	// Each source is treated as a YAML document and merged in array order.
+	// Later sources take precedence over earlier ones in case of key conflicts.
+	// Each entry must specify exactly one of ConfigMapRef or SecretRef.
+	// +kubebuilder:validation:Optional
+	ValuesFrom []ValuesSource `json:"valuesFrom,omitempty"`
 }
 
 // ResourceLimitsConfig specifies CPU and memory limits for jobs.

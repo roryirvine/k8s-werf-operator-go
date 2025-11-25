@@ -89,6 +89,65 @@ spec:
                       This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
                     minLength: 1
                     type: string
+                  valuesFrom:
+                    description: |-
+                      ValuesFrom is a list of sources to populate configuration values for werf converge.
+                      Each source is treated as a YAML document and merged in array order.
+                      Later sources take precedence over earlier ones in case of key conflicts.
+                      Each entry must specify exactly one of ConfigMapRef or SecretRef.
+                    items:
+                      description: |-
+                        ValuesSource represents a source of configuration values for werf converge.
+                        The entire ConfigMap or Secret is treated as YAML data and merged with other sources.
+                        Values are passed to werf converge as --set flags.
+                        Exactly one of ConfigMapRef or SecretRef must be set.
+                      properties:
+                        configMapRef:
+                          description: |-
+                            ConfigMapRef is a reference to a ConfigMap containing values as YAML data.
+                            The ConfigMap is looked up first in the WerfBundle's namespace, then in the target namespace.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        optional:
+                          default: false
+                          description: |-
+                            Optional specifies whether this values source is required.
+                            If false (default), the deployment fails if the ConfigMap or Secret is not found.
+                            If true, the deployment proceeds even if the resource is missing.
+                          type: boolean
+                        secretRef:
+                          description: |-
+                            SecretRef is a reference to a Secret containing values as YAML data.
+                            The Secret is looked up first in the WerfBundle's namespace, then in the target namespace.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of configMapRef or secretRef must be
+                          set
+                        rule: '[has(self.configMapRef), has(self.secretRef)].filter(x,
+                          x).size() == 1'
+                    type: array
                 required:
                 - serviceAccountName
                 type: object

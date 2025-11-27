@@ -29,8 +29,8 @@ func fetchConfigMap(
 
 	err := c.Get(ctx, bundleKey, cm)
 	if err == nil {
-		// Found in bundle namespace
-		return cm.Data, nil
+		// Found in bundle namespace - parse and merge all YAML values
+		return parseAndMergeConfigMapData(cm.Data)
 	}
 
 	// If error is not NotFound, propagate it (API error, permission issue, etc.)
@@ -48,8 +48,8 @@ func fetchConfigMap(
 
 		err = c.Get(ctx, targetKey, cm)
 		if err == nil {
-			// Found in target namespace
-			return cm.Data, nil
+			// Found in target namespace - parse and merge all YAML values
+			return parseAndMergeConfigMapData(cm.Data)
 		}
 
 		// If error is not NotFound, propagate it
@@ -87,8 +87,8 @@ func fetchSecret(
 
 	err := c.Get(ctx, bundleKey, secret)
 	if err == nil {
-		// Found in bundle namespace - convert byte data to strings
-		return secretDataToStringMap(secret.Data), nil
+		// Found in bundle namespace - parse and merge all YAML values
+		return parseAndMergeSecretData(secret.Data)
 	}
 
 	// If error is not NotFound, propagate it (API error, permission issue, etc.)
@@ -106,8 +106,8 @@ func fetchSecret(
 
 		err = c.Get(ctx, targetKey, secret)
 		if err == nil {
-			// Found in target namespace
-			return secretDataToStringMap(secret.Data), nil
+			// Found in target namespace - parse and merge all YAML values
+			return parseAndMergeSecretData(secret.Data)
 		}
 
 		// If error is not NotFound, propagate it
@@ -134,4 +134,27 @@ func secretDataToStringMap(data map[string][]byte) map[string]string {
 		result[k] = string(v)
 	}
 	return result
+}
+
+// parseAndMergeConfigMapData parses each ConfigMap value as YAML and merges them.
+// Each key in the ConfigMap is treated as containing a YAML document.
+// The YAML is flattened and all results are merged together.
+func parseAndMergeConfigMapData(data map[string]string) (map[string]string, error) {
+	var maps []map[string]string
+	for key, yamlData := range data {
+		parsed, err := parseYAML(yamlData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse YAML from ConfigMap key %q: %w", key, err)
+		}
+		maps = append(maps, parsed)
+	}
+	return mergeMaps(maps...), nil
+}
+
+// parseAndMergeSecretData parses each Secret value as YAML and merges them.
+// Each key in the Secret is treated as containing a YAML document.
+// The YAML is flattened and all results are merged together.
+func parseAndMergeSecretData(data map[string][]byte) (map[string]string, error) {
+	stringData := secretDataToStringMap(data)
+	return parseAndMergeConfigMapData(stringData)
 }

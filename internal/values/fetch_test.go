@@ -30,8 +30,10 @@ func TestFetchConfigMap(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string]string{
-						"key1": "value1",
-						"key2": "value2",
+						"values.yaml": `
+key1: value1
+key2: value2
+`,
 					},
 				},
 			},
@@ -53,7 +55,7 @@ func TestFetchConfigMap(t *testing.T) {
 						Namespace: "target-ns",
 					},
 					Data: map[string]string{
-						"key1": "target-value1",
+						"values.yaml": `key1: target-value1`,
 					},
 				},
 			},
@@ -74,7 +76,7 @@ func TestFetchConfigMap(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string]string{
-						"key1": "bundle-value",
+						"values.yaml": `key1: bundle-value`,
 					},
 				},
 				{
@@ -83,7 +85,7 @@ func TestFetchConfigMap(t *testing.T) {
 						Namespace: "target-ns",
 					},
 					Data: map[string]string{
-						"key1": "target-value",
+						"values.yaml": `key1: target-value`,
 					},
 				},
 			},
@@ -124,7 +126,7 @@ func TestFetchConfigMap(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string]string{
-						"key1": "value1",
+						"values.yaml": `key1: value1`,
 					},
 				},
 			},
@@ -227,8 +229,10 @@ func TestFetchSecret(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string][]byte{
-						"key1": []byte("secret-value1"),
-						"key2": []byte("secret-value2"),
+						"values.yaml": []byte(`
+key1: secret-value1
+key2: secret-value2
+`),
 					},
 				},
 			},
@@ -250,7 +254,7 @@ func TestFetchSecret(t *testing.T) {
 						Namespace: "target-ns",
 					},
 					Data: map[string][]byte{
-						"key1": []byte("target-secret-value1"),
+						"values.yaml": []byte(`key1: target-secret-value1`),
 					},
 				},
 			},
@@ -271,7 +275,7 @@ func TestFetchSecret(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string][]byte{
-						"key1": []byte("bundle-secret"),
+						"values.yaml": []byte(`key1: bundle-secret`),
 					},
 				},
 				{
@@ -280,7 +284,7 @@ func TestFetchSecret(t *testing.T) {
 						Namespace: "target-ns",
 					},
 					Data: map[string][]byte{
-						"key1": []byte("target-secret"),
+						"values.yaml": []byte(`key1: target-secret`),
 					},
 				},
 			},
@@ -321,7 +325,7 @@ func TestFetchSecret(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string][]byte{
-						"key1": []byte("value1"),
+						"values.yaml": []byte(`key1: value1`),
 					},
 				},
 			},
@@ -334,7 +338,7 @@ func TestFetchSecret(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Secret with binary data is converted to string",
+			name: "Secret with YAML in multiple keys are merged",
 			secrets: []*corev1.Secret{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -342,7 +346,8 @@ func TestFetchSecret(t *testing.T) {
 						Namespace: "bundle-ns",
 					},
 					Data: map[string][]byte{
-						"binary": {0x48, 0x65, 0x6c, 0x6c, 0x6f}, // "Hello" in bytes
+						"config1.yaml": []byte(`key1: value1`),
+						"config2.yaml": []byte(`key2: value2`),
 					},
 				},
 			},
@@ -350,7 +355,8 @@ func TestFetchSecret(t *testing.T) {
 			bundleNamespace: "bundle-ns",
 			targetNamespace: "target-ns",
 			wantData: map[string]string{
-				"binary": "Hello",
+				"key1": "value1",
+				"key2": "value2",
 			},
 			wantErr: false,
 		},

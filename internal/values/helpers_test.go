@@ -54,3 +54,110 @@ func TestGetTargetNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateSetFlags(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+		want   []string
+	}{
+		{
+			name:   "Empty map returns nil",
+			values: map[string]string{},
+			want:   nil,
+		},
+		{
+			name:   "Nil map returns nil",
+			values: nil,
+			want:   nil,
+		},
+		{
+			name: "Single key-value pair",
+			values: map[string]string{
+				"key1": "value1",
+			},
+			want: []string{"--set", "key1=value1"},
+		},
+		{
+			name: "Multiple key-value pairs are sorted",
+			values: map[string]string{
+				"zebra": "z-value",
+				"alpha": "a-value",
+				"beta":  "b-value",
+			},
+			want: []string{
+				"--set", "alpha=a-value",
+				"--set", "beta=b-value",
+				"--set", "zebra=z-value",
+			},
+		},
+		{
+			name: "Dot notation keys are sorted",
+			values: map[string]string{
+				"app.database.host": "localhost",
+				"app.cache.enabled": "true",
+				"app.database.port": "5432",
+			},
+			want: []string{
+				"--set", "app.cache.enabled=true",
+				"--set", "app.database.host=localhost",
+				"--set", "app.database.port=5432",
+			},
+		},
+		{
+			name: "Array bracket notation keys",
+			values: map[string]string{
+				"servers[0].name": "server1",
+				"servers[1].name": "server2",
+				"servers[0].port": "8080",
+			},
+			want: []string{
+				"--set", "servers[0].name=server1",
+				"--set", "servers[0].port=8080",
+				"--set", "servers[1].name=server2",
+			},
+		},
+		{
+			name: "Values with special characters",
+			values: map[string]string{
+				"key1": "value with spaces",
+				"key2": "value=with=equals",
+				"key3": "value,with,commas",
+			},
+			want: []string{
+				"--set", "key1=value with spaces",
+				"--set", "key2=value=with=equals",
+				"--set", "key3=value,with,commas",
+			},
+		},
+		{
+			name: "Empty string value",
+			values: map[string]string{
+				"key1": "",
+			},
+			want: []string{"--set", "key1="},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GenerateSetFlags(tt.values)
+			if !slicesEqual(got, tt.want) {
+				t.Errorf("GenerateSetFlags() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// slicesEqual compares two string slices for equality.
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

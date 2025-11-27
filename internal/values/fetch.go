@@ -67,3 +67,71 @@ func fetchConfigMap(
 	return nil, fmt.Errorf("ConfigMap %q not found in namespace %q",
 		name, bundleNamespace)
 }
+
+// fetchSecret retrieves a Secret from either the bundle namespace or target namespace.
+// It searches the bundle namespace first (admin-controlled values), then the target namespace.
+// Returns the Secret's data as a string map (decoded from base64), or an error if not found.
+func fetchSecret(
+	ctx context.Context,
+	c client.Client,
+	name string,
+	bundleNamespace string,
+	targetNamespace string,
+) (map[string]string, error) {
+	// Try bundle namespace first (admin-controlled, takes precedence)
+	secret := &corev1.Secret{}
+	bundleKey := types.NamespacedName{
+		Name:      name,
+		Namespace: bundleNamespace,
+	}
+
+	err := c.Get(ctx, bundleKey, secret)
+	if err == nil {
+		// Found in bundle namespace - convert byte data to strings
+		return secretDataToStringMap(secret.Data), nil
+	}
+
+	// If error is not NotFound, propagate it (API error, permission issue, etc.)
+	if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get Secret %q from namespace %q: %w",
+			name, bundleNamespace, err)
+	}
+
+	// Not found in bundle namespace, try target namespace if different
+	if targetNamespace != "" && targetNamespace != bundleNamespace {
+		targetKey := types.NamespacedName{
+			Name:      name,
+			Namespace: targetNamespace,
+		}
+
+		err = c.Get(ctx, targetKey, secret)
+		if err == nil {
+			// Found in target namespace
+			return secretDataToStringMap(secret.Data), nil
+		}
+
+		// If error is not NotFound, propagate it
+		if !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get Secret %q from namespace %q: %w",
+				name, targetNamespace, err)
+		}
+	}
+
+	// Not found in either namespace
+	if targetNamespace != "" && targetNamespace != bundleNamespace {
+		return nil, fmt.Errorf("Secret %q not found in namespaces %q or %q",
+			name, bundleNamespace, targetNamespace)
+	}
+	return nil, fmt.Errorf("Secret %q not found in namespace %q",
+		name, bundleNamespace)
+}
+
+// secretDataToStringMap converts Secret.Data (map[string][]byte) to map[string]string.
+// Secret data is already base64-decoded by the Kubernetes client.
+func secretDataToStringMap(data map[string][]byte) map[string]string {
+	result := make(map[string]string, len(data))
+	for k, v := range data {
+		result[k] = string(v)
+	}
+	return result
+}

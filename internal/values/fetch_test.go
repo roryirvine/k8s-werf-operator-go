@@ -206,3 +206,251 @@ func mapsEqual(a, b map[string]string) bool {
 	}
 	return true
 }
+
+func TestFetchSecret(t *testing.T) {
+	tests := []struct {
+		name            string
+		secrets         []*corev1.Secret
+		secretName      string
+		bundleNamespace string
+		targetNamespace string
+		wantData        map[string]string
+		wantErr         bool
+		errContains     string
+	}{
+		{
+			name: "Secret in bundle namespace",
+			secrets: []*corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-secret",
+						Namespace: "bundle-ns",
+					},
+					Data: map[string][]byte{
+						"key1": []byte("secret-value1"),
+						"key2": []byte("secret-value2"),
+					},
+				},
+			},
+			secretName:      "test-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			wantData: map[string]string{
+				"key1": "secret-value1",
+				"key2": "secret-value2",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Secret in target namespace only",
+			secrets: []*corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-secret",
+						Namespace: "target-ns",
+					},
+					Data: map[string][]byte{
+						"key1": []byte("target-secret-value1"),
+					},
+				},
+			},
+			secretName:      "test-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			wantData: map[string]string{
+				"key1": "target-secret-value1",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Secret in both namespaces - bundle wins",
+			secrets: []*corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-secret",
+						Namespace: "bundle-ns",
+					},
+					Data: map[string][]byte{
+						"key1": []byte("bundle-secret"),
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-secret",
+						Namespace: "target-ns",
+					},
+					Data: map[string][]byte{
+						"key1": []byte("target-secret"),
+					},
+				},
+			},
+			secretName:      "test-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			wantData: map[string]string{
+				"key1": "bundle-secret",
+			},
+			wantErr: false,
+		},
+		{
+			name:            "Secret not found in either namespace",
+			secrets:         []*corev1.Secret{},
+			secretName:      "missing-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			wantData:        nil,
+			wantErr:         true,
+			errContains:     "not found in namespaces",
+		},
+		{
+			name:            "Secret not found in single namespace",
+			secrets:         []*corev1.Secret{},
+			secretName:      "missing-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "bundle-ns",
+			wantData:        nil,
+			wantErr:         true,
+			errContains:     "not found in namespace",
+		},
+		{
+			name: "Empty target namespace falls back to bundle namespace only",
+			secrets: []*corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-secret",
+						Namespace: "bundle-ns",
+					},
+					Data: map[string][]byte{
+						"key1": []byte("value1"),
+					},
+				},
+			},
+			secretName:      "test-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "",
+			wantData: map[string]string{
+				"key1": "value1",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Secret with binary data is converted to string",
+			secrets: []*corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-secret",
+						Namespace: "bundle-ns",
+					},
+					Data: map[string][]byte{
+						"binary": {0x48, 0x65, 0x6c, 0x6c, 0x6f}, // "Hello" in bytes
+					},
+				},
+			},
+			secretName:      "test-secret",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			wantData: map[string]string{
+				"binary": "Hello",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create fake client with test Secrets
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+
+			objs := make([]runtime.Object, len(tt.secrets))
+			for i, secret := range tt.secrets {
+				objs[i] = secret
+			}
+
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRuntimeObjects(objs...).
+				Build()
+
+			// Call fetchSecret
+			ctx := context.Background()
+			gotData, err := fetchSecret(
+				ctx,
+				fakeClient,
+				tt.secretName,
+				tt.bundleNamespace,
+				tt.targetNamespace,
+			)
+
+			// Check error
+			if (err != nil) != tt.wantErr {
+				t.Errorf("fetchSecret() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && tt.errContains != "" {
+				if err == nil || !contains(err.Error(), tt.errContains) {
+					t.Errorf("fetchSecret() error = %v, should contain %q", err, tt.errContains)
+				}
+				return
+			}
+
+			// Check data
+			if !mapsEqual(gotData, tt.wantData) {
+				t.Errorf("fetchSecret() data = %v, want %v", gotData, tt.wantData)
+			}
+		})
+	}
+}
+
+func TestSecretDataToStringMap(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string][]byte
+		want map[string]string
+	}{
+		{
+			name: "Empty data",
+			data: map[string][]byte{},
+			want: map[string]string{},
+		},
+		{
+			name: "Simple string data",
+			data: map[string][]byte{
+				"key1": []byte("value1"),
+				"key2": []byte("value2"),
+			},
+			want: map[string]string{
+				"key1": "value1",
+				"key2": "value2",
+			},
+		},
+		{
+			name: "Binary data",
+			data: map[string][]byte{
+				"binary": {0x48, 0x65, 0x6c, 0x6c, 0x6f},
+			},
+			want: map[string]string{
+				"binary": "Hello",
+			},
+		},
+		{
+			name: "Empty string value",
+			data: map[string][]byte{
+				"empty": []byte(""),
+			},
+			want: map[string]string{
+				"empty": "",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := secretDataToStringMap(tt.data)
+			if !mapsEqual(got, tt.want) {
+				t.Errorf("secretDataToStringMap() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

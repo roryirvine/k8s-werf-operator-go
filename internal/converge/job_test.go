@@ -1,6 +1,7 @@
 package converge
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -41,7 +42,7 @@ func TestBuilder_Build_ValidBundle(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -113,8 +114,8 @@ func TestBuilder_Build_DeterministicName(t *testing.T) {
 	builder := NewBuilder(bundle).WithScheme(testScheme)
 
 	// Build same job twice with same tag
-	job1, _ := builder.Build("v1.0.0")
-	job2, _ := builder.Build("v1.0.0")
+	job1, _ := builder.Build(context.Background(), "v1.0.0")
+	job2, _ := builder.Build(context.Background(), "v1.0.0")
 
 	// Verify both names have the same format and bundle/tag hash parts
 	// but different UUIDs (they're random)
@@ -144,7 +145,7 @@ func TestBuilder_Build_DeterministicName(t *testing.T) {
 	}
 
 	// Build job with different tag
-	job3, _ := builder.Build("v2.0.0")
+	job3, _ := builder.Build(context.Background(), "v2.0.0")
 	parts3 := splitJobName(job3.Name)
 
 	// Different tag should produce different hash
@@ -206,7 +207,7 @@ func TestBuilder_Build_OwnerReference(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -252,7 +253,7 @@ func TestBuilder_Build_ResourceLimits(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -309,7 +310,7 @@ func TestBuilder_Build_JobSpec(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, _ := builder.Build("v1.0.0")
+	job, _ := builder.Build(context.Background(), "v1.0.0")
 
 	// Verify job spec
 	// Backoff limit of 0 means job doesn't retry; controller handles retries
@@ -331,7 +332,7 @@ func TestBuilder_Build_JobSpec(t *testing.T) {
 
 func TestBuilder_Build_NilBundle(t *testing.T) {
 	builder := NewBuilder(nil)
-	_, err := builder.Build("v1.0.0")
+	_, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err == nil {
 		t.Error("expected error for nil bundle, got nil")
@@ -359,7 +360,7 @@ func TestBuilder_Build_CustomResourceLimits(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -413,7 +414,7 @@ func TestBuilder_Build_PartialResourceLimits(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -453,7 +454,7 @@ func TestBuilder_Build_DefaultResourceLimits(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -493,7 +494,7 @@ func TestBuilder_Build_CustomLogRetention(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -529,7 +530,7 @@ func TestBuilder_Build_PartialLogRetention(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -563,7 +564,7 @@ func TestBuilder_Build_DefaultLogRetention(t *testing.T) {
 	}
 
 	builder := NewBuilder(bundle).WithScheme(testScheme)
-	job, err := builder.Build("v1.0.0")
+	job, err := builder.Build(context.Background(), "v1.0.0")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -602,7 +603,7 @@ func TestBuilder_Build_UniqueUUIDs(t *testing.T) {
 	uuids := make(map[string]bool)
 
 	for i := 0; i < 10; i++ {
-		job, err := builder.Build("v1.0.0")
+		job, err := builder.Build(context.Background(), "v1.0.0")
 		if err != nil {
 			t.Fatalf("Build failed: %v", err)
 		}

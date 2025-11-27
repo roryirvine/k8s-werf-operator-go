@@ -99,6 +99,25 @@ func TestWerfBundleCreation(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid WerfBundle with TargetNamespace (Slice 3)",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle-target-ns",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+						TargetNamespace:    "my-app-prod",
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

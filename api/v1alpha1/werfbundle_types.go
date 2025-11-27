@@ -89,6 +89,12 @@ type ConvergeConfig struct {
 	// +kubebuilder:validation:MinLength=1
 	ServiceAccountName string `json:"serviceAccountName"`
 
+	// TargetNamespace is the namespace where werf converge will deploy resources.
+	// If not specified, defaults to the bundle's namespace.
+	// This is also used as the fallback namespace when looking up values from ConfigMaps and Secrets.
+	// +kubebuilder:validation:Optional
+	TargetNamespace string `json:"targetNamespace,omitempty"`
+
 	// ResourceLimits specifies CPU and memory limits for werf converge jobs.
 	// If not specified, defaults are used: 1 CPU and 1Gi memory.
 	// +kubebuilder:validation:Optional

@@ -22,6 +22,7 @@ import (
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	"github.com/werf/k8s-werf-operator-go/internal/converge"
 	"github.com/werf/k8s-werf-operator-go/internal/registry"
+	"github.com/werf/k8s-werf-operator-go/internal/values"
 )
 
 const (
@@ -301,9 +302,12 @@ func (r *WerfBundleReconciler) ensureJobExists(
 		return ctrl.Result{}, err
 	}
 
-	// Build the Job spec
-	jobBuilder := converge.NewBuilder(bundle).WithScheme(r.Scheme)
-	jobSpec, err := jobBuilder.Build(latestTag)
+	// Build the Job spec with values resolver
+	valuesResolver := values.NewResolver(r.Client)
+	jobBuilder := converge.NewBuilder(bundle).
+		WithScheme(r.Scheme).
+		WithValuesResolver(valuesResolver)
+	jobSpec, err := jobBuilder.Build(ctx, latestTag)
 	if err != nil {
 		log.Error(err, "failed to build Job")
 		if err := r.updateStatusFailed(ctx, bundle, fmt.Sprintf("Failed to build Job: %v", err)); err != nil {

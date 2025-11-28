@@ -140,7 +140,7 @@ func secretDataToStringMap(data map[string][]byte) map[string]string {
 // Each key in the ConfigMap is treated as containing a YAML document.
 // The YAML is flattened and all results are merged together.
 func parseAndMergeConfigMapData(data map[string]string) (map[string]string, error) {
-	var maps []map[string]string
+	maps := make([]map[string]string, 0, len(data))
 	for key, yamlData := range data {
 		parsed, err := parseYAML(yamlData)
 		if err != nil {

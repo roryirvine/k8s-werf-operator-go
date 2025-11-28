@@ -29,7 +29,7 @@ func (r *ResolverImpl) ResolveValues(
 	bundleNamespace string,
 	targetNamespace string,
 ) (map[string]string, error) {
-	var allMaps []map[string]string
+	allMaps := make([]map[string]string, 0, len(sources))
 
 	for i, source := range sources {
 		var data map[string]string

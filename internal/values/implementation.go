@@ -4,6 +4,7 @@ package values
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -78,23 +79,7 @@ func isNotFoundError(err error) bool {
 	// Check for our custom "not found" errors from fetch functions
 	// (These contain "not found" in the error message)
 	if err != nil {
-		errMsg := err.Error()
-		return stringContains(errMsg, "not found")
-	}
-	return false
-}
-
-// stringContains checks if a string contains a substring.
-func stringContains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstringIn(s, substr)))
-}
-
-func findSubstringIn(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+		return strings.Contains(err.Error(), "not found")
 	}
 	return false
 }

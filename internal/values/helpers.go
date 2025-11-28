@@ -1,7 +1,11 @@
 // Package values provides utilities for resolving configuration values from ConfigMaps and Secrets.
 package values
 
-import werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
+import (
+	"sort"
+
+	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
+)
 
 // GetTargetNamespace returns the target namespace from ConvergeConfig, or the bundle namespace if not specified.
 // This implements the fallback behavior where targetNamespace defaults to bundleNamespace.
@@ -26,7 +30,7 @@ func GenerateSetFlags(values map[string]string) []string {
 	for k := range values {
 		keys = append(keys, k)
 	}
-	sortStrings(keys)
+	sort.Strings(keys)
 
 	// Generate --set flags
 	flags := make([]string, 0, len(values)*2)
@@ -36,16 +40,4 @@ func GenerateSetFlags(values map[string]string) []string {
 	}
 
 	return flags
-}
-
-// sortStrings sorts a slice of strings in place using simple bubble sort.
-func sortStrings(s []string) {
-	n := len(s)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if s[j] > s[j+1] {
-				s[j], s[j+1] = s[j+1], s[j]
-			}
-		}
-	}
 }

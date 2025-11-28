@@ -61,10 +61,10 @@ func fetchConfigMap(
 
 	// Not found in either namespace
 	if targetNamespace != "" && targetNamespace != bundleNamespace {
-		return nil, fmt.Errorf("ConfigMap %q not found in namespaces %q or %q",
+		return nil, fmt.Errorf("configMap %q not found in namespaces %q or %q",
 			name, bundleNamespace, targetNamespace)
 	}
-	return nil, fmt.Errorf("ConfigMap %q not found in namespace %q",
+	return nil, fmt.Errorf("configMap %q not found in namespace %q",
 		name, bundleNamespace)
 }
 
@@ -119,10 +119,10 @@ func fetchSecret(
 
 	// Not found in either namespace
 	if targetNamespace != "" && targetNamespace != bundleNamespace {
-		return nil, fmt.Errorf("Secret %q not found in namespaces %q or %q",
+		return nil, fmt.Errorf("secret %q not found in namespaces %q or %q",
 			name, bundleNamespace, targetNamespace)
 	}
-	return nil, fmt.Errorf("Secret %q not found in namespace %q",
+	return nil, fmt.Errorf("secret %q not found in namespace %q",
 		name, bundleNamespace)
 }
 

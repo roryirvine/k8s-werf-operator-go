@@ -13,6 +13,11 @@ func TestEscapeValue(t *testing.T) {
 			value: "hello",
 			want:  `"hello"`,
 		},
+		{
+			name:  "Value with spaces",
+			value: "hello world",
+			want:  `"hello world"`,
+		},
 	}
 
 	for _, tt := range tests {

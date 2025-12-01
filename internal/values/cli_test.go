@@ -18,6 +18,11 @@ func TestEscapeValue(t *testing.T) {
 			value: "hello world",
 			want:  `"hello world"`,
 		},
+		{
+			name:  "Empty value",
+			value: "",
+			want:  `""`,
+		},
 	}
 
 	for _, tt := range tests {

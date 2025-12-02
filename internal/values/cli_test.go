@@ -28,6 +28,11 @@ func TestEscapeValue(t *testing.T) {
 			value: `say "hello"`,
 			want:  `"say \"hello\""`,
 		},
+		{
+			name:  "Value with single quotes",
+			value: "it's working",
+			want:  `"it's working"`,
+		},
 	}
 
 	for _, tt := range tests {

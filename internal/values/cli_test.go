@@ -33,6 +33,11 @@ func TestEscapeValue(t *testing.T) {
 			value: "it's working",
 			want:  `"it's working"`,
 		},
+		{
+			name:  "Value with equals signs",
+			value: "key=value",
+			want:  `"key=value"`,
+		},
 	}
 
 	for _, tt := range tests {

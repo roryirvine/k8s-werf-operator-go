@@ -38,6 +38,11 @@ func TestEscapeValue(t *testing.T) {
 			value: "key=value",
 			want:  `"key=value"`,
 		},
+		{
+			name:  "Value with newlines",
+			value: "line1\nline2",
+			want:  `"line1\nline2"`,
+		},
 	}
 
 	for _, tt := range tests {

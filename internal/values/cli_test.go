@@ -48,6 +48,11 @@ func TestEscapeValue(t *testing.T) {
 			value: `C:\path\to\file`,
 			want:  `"C:\\path\\to\\file"`,
 		},
+		{
+			name:  "Value with tabs",
+			value: "col1\tcol2",
+			want:  `"col1\tcol2"`,
+		},
 	}
 
 	for _, tt := range tests {

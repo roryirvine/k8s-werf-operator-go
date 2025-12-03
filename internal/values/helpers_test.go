@@ -137,6 +137,21 @@ func TestGenerateSetFlags(t *testing.T) {
 			},
 			want: []string{"--set", `key1=""`},
 		},
+		{
+			name: "Integration test with complex special characters",
+			values: map[string]string{
+				"db.url":      "postgres://user:pass@localhost/db",
+				"api.key":     `secret="value"`,
+				"config.path": `C:\Program Files\App`,
+				"multiline":   "line1\nline2\ttab",
+			},
+			want: []string{
+				"--set", `api.key="secret=\"value\""`,
+				"--set", `config.path="C:\\Program Files\\App"`,
+				"--set", `db.url="postgres://user:pass@localhost/db"`,
+				"--set", `multiline="line1\nline2\ttab"`,
+			},
+		},
 	}
 
 	for _, tt := range tests {

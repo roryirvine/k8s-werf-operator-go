@@ -76,7 +76,7 @@ func TestGenerateSetFlags(t *testing.T) {
 			values: map[string]string{
 				"key1": "value1",
 			},
-			want: []string{"--set", "key1=value1"},
+			want: []string{"--set", `key1="value1"`},
 		},
 		{
 			name: "Multiple key-value pairs are sorted",
@@ -86,9 +86,9 @@ func TestGenerateSetFlags(t *testing.T) {
 				"beta":  "b-value",
 			},
 			want: []string{
-				"--set", "alpha=a-value",
-				"--set", "beta=b-value",
-				"--set", "zebra=z-value",
+				"--set", `alpha="a-value"`,
+				"--set", `beta="b-value"`,
+				"--set", `zebra="z-value"`,
 			},
 		},
 		{
@@ -99,9 +99,9 @@ func TestGenerateSetFlags(t *testing.T) {
 				"app.database.port": "5432",
 			},
 			want: []string{
-				"--set", "app.cache.enabled=true",
-				"--set", "app.database.host=localhost",
-				"--set", "app.database.port=5432",
+				"--set", `app.cache.enabled="true"`,
+				"--set", `app.database.host="localhost"`,
+				"--set", `app.database.port="5432"`,
 			},
 		},
 		{
@@ -112,9 +112,9 @@ func TestGenerateSetFlags(t *testing.T) {
 				"servers[0].port": "8080",
 			},
 			want: []string{
-				"--set", "servers[0].name=server1",
-				"--set", "servers[0].port=8080",
-				"--set", "servers[1].name=server2",
+				"--set", `servers[0].name="server1"`,
+				"--set", `servers[0].port="8080"`,
+				"--set", `servers[1].name="server2"`,
 			},
 		},
 		{
@@ -125,9 +125,9 @@ func TestGenerateSetFlags(t *testing.T) {
 				"key3": "value,with,commas",
 			},
 			want: []string{
-				"--set", "key1=value with spaces",
-				"--set", "key2=value=with=equals",
-				"--set", "key3=value,with,commas",
+				"--set", `key1="value with spaces"`,
+				"--set", `key2="value=with=equals"`,
+				"--set", `key3="value,with,commas"`,
 			},
 		},
 		{
@@ -135,7 +135,7 @@ func TestGenerateSetFlags(t *testing.T) {
 			values: map[string]string{
 				"key1": "",
 			},
-			want: []string{"--set", "key1="},
+			want: []string{"--set", `key1=""`},
 		},
 	}
 

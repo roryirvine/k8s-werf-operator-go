@@ -53,6 +53,11 @@ func TestEscapeValue(t *testing.T) {
 			value: "col1\tcol2",
 			want:  `"col1\tcol2"`,
 		},
+		{
+			name:  "Value with mixed special characters",
+			value: "path=\"C:\\data\"\nkey=value\ttab",
+			want:  `"path=\"C:\\data\"\nkey=value\ttab"`,
+		},
 	}
 
 	for _, tt := range tests {

@@ -36,7 +36,7 @@ func GenerateSetFlags(values map[string]string) []string {
 	flags := make([]string, 0, len(values)*2)
 	for _, key := range keys {
 		flags = append(flags, "--set")
-		flags = append(flags, key+"="+values[key])
+		flags = append(flags, key+"="+escapeValue(values[key]))
 	}
 
 	return flags

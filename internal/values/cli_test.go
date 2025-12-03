@@ -43,6 +43,11 @@ func TestEscapeValue(t *testing.T) {
 			value: "line1\nline2",
 			want:  `"line1\nline2"`,
 		},
+		{
+			name:  "Value with backslashes",
+			value: `C:\path\to\file`,
+			want:  `"C:\\path\\to\\file"`,
+		},
 	}
 
 	for _, tt := range tests {

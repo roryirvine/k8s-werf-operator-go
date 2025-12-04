@@ -60,8 +60,8 @@ app:
 				},
 			},
 			wantArgsContain: []string{
-				"--set", "app.name=my-app",
-				"--set", "app.replicas=3",
+				"--set", `app.name="my-app"`,
+				"--set", `app.replicas="3"`,
 			},
 			wantErr: false,
 		},
@@ -115,8 +115,8 @@ key2: also-base
 				},
 			},
 			wantArgsContain: []string{
-				"--set", "key1=base-value",
-				"--set", "key2=secret-override", // Later source wins
+				"--set", `key1="base-value"`,
+				"--set", `key2="secret-override"`, // Later source wins
 			},
 			wantErr: false,
 		},
@@ -154,7 +154,7 @@ key2: also-base
 				},
 			},
 			wantArgsContain: []string{
-				"--set", "env=production",
+				"--set", `env="production"`,
 			},
 			wantErr: false,
 		},
@@ -201,7 +201,7 @@ key2: also-base
 				},
 			},
 			wantArgsContain: []string{
-				"--set", "env=admin-override", // Bundle namespace wins
+				"--set", `env="admin-override"`, // Bundle namespace wins
 			},
 			wantErr: false,
 		},
@@ -242,7 +242,7 @@ key2: also-base
 				},
 			},
 			wantArgsContain: []string{
-				"--set", "key=value",
+				"--set", `key="value"`,
 			},
 			wantErr: false,
 		},

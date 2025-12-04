@@ -2,6 +2,7 @@ package values
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
@@ -310,7 +311,7 @@ key3: value3
 			}
 
 			if tt.wantErr && tt.errContains != "" {
-				if err == nil || !contains(err.Error(), tt.errContains) {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("ResolveValues() error = %v, should contain %q", err, tt.errContains)
 				}
 				return

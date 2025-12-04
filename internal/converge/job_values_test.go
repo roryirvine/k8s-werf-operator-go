@@ -2,6 +2,7 @@ package converge
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -333,7 +334,7 @@ key2: also-base
 			}
 
 			if tt.wantErr {
-				if tt.errContains != "" && (err == nil || !contains(err.Error(), tt.errContains)) {
+				if tt.errContains != "" && (err == nil || !strings.Contains(err.Error(), tt.errContains)) {
 					t.Errorf("Build() error = %v, should contain %q", err, tt.errContains)
 				}
 				return
@@ -356,21 +357,6 @@ key2: also-base
 func containsString(slice []string, s string) bool {
 	for _, item := range slice {
 		if item == s {
-			return true
-		}
-	}
-	return false
-}
-
-// Helper to check if error message contains substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
 			return true
 		}
 	}

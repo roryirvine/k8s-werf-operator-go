@@ -189,6 +189,172 @@ spec:
 - Longer retention (14-30 days) for production deployments to facilitate debugging
 - Logs beyond what fits in status (~5KB) require checking pod logs directly
 
+### valuesFrom (Optional)
+
+External configuration values from ConfigMaps and Secrets to pass to werf converge.
+
+```yaml
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: app-config
+      - secretRef:
+          name: app-secrets
+        optional: true
+```
+
+**How it works**:
+- Each source (ConfigMap or Secret) is fetched and parsed as YAML
+- Values are flattened to dot notation (e.g., `database.host`, `database.port`)
+- All sources are merged in array order (later sources override earlier ones)
+- Converted to `--set` flags for werf converge: `--set database.host=localhost`
+
+**Namespace lookup precedence**:
+1. Bundle namespace (where WerfBundle resource lives) - checked first
+2. Target namespace (where resources are deployed) - checked second if different
+
+This precedence model allows admins to override application-provided values by placing ConfigMaps/Secrets in the operator namespace.
+
+**ConfigMap source**:
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: app-config
+```
+
+Creates a ConfigMap with YAML values:
+```bash
+kubectl create configmap app-config --from-literal=values.yaml='
+app:
+  name: my-app
+  replicas: 3
+database:
+  host: postgres.default.svc
+  port: 5432
+' -n production
+```
+
+**Secret source**:
+```yaml
+valuesFrom:
+  - secretRef:
+      name: app-secrets
+```
+
+Creates a Secret with sensitive YAML values:
+```bash
+kubectl create secret generic app-secrets --from-literal=values.yaml='
+database:
+  password: supersecret
+  connectionString: postgresql://user:pass@host/db
+' -n production
+```
+
+**Optional sources**:
+
+Mark a source as optional if it might not exist in all environments:
+
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: base-config
+  - configMapRef:
+      name: env-specific-config
+    optional: true
+```
+
+- If a required source is missing, the bundle is marked Failed
+- If an optional source is missing, it's silently skipped
+
+**Merge precedence**:
+
+Later sources override earlier ones for the same keys:
+
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: defaults        # Base configuration
+  - configMapRef:
+      name: environment     # Environment overrides
+  - secretRef:
+      name: secrets         # Sensitive overrides
+```
+
+If all three sources define `database.host`:
+1. `defaults` provides `database.host: dev-db`
+2. `environment` overrides to `database.host: prod-db`
+3. `secrets` final value `database.host: secure-prod-db` wins
+
+**Special characters**:
+
+Values containing special characters are automatically escaped for Helm compatibility:
+
+| Character | Escaping | Example Input | Example Output |
+|-----------|----------|---------------|----------------|
+| Comma (,) | `\,` | `a,b,c` | `a\,b\,c` |
+| Equals (=) | `\=` | `key=value` | `key\=value` |
+| Backslash (\) | `\\` | `C:\path` | `C:\\path` |
+| Brackets ([]) | `\[` `\]` | `arr[0]` | `arr\[0\]` |
+
+No action needed - escaping is automatic.
+
+**Common patterns**:
+
+*Pattern 1: Base + Environment-specific*
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: app-base-config       # Shared across all environments
+  - configMapRef:
+      name: app-prod-config       # Production overrides
+```
+
+*Pattern 2: Non-sensitive + Sensitive*
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: app-config            # Public configuration
+  - secretRef:
+      name: app-secrets           # Passwords, tokens, keys
+```
+
+*Pattern 3: Admin override*
+```yaml
+# ConfigMap in operator namespace (checked first)
+# Overrides any app-provided values from target namespace
+valuesFrom:
+  - configMapRef:
+      name: admin-overrides
+```
+
+**Limitations**:
+- ConfigMaps and Secrets must contain YAML data (not arbitrary key-value pairs)
+- Each key in the ConfigMap/Secret should contain a YAML document
+- Maximum total values size is limited by Kubernetes command-line length (~2MB)
+
+**Example ConfigMap structure**:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  values.yaml: |
+    app:
+      name: my-app
+      replicas: 3
+    database:
+      host: postgres
+      port: 5432
+```
+
+Each key (`values.yaml` in this case) is parsed as YAML and flattened to:
+- `app.name=my-app`
+- `app.replicas=3`
+- `database.host=postgres`
+- `database.port=5432`
+
 ## Reliability Behavior
 
 ### ETag Caching
@@ -285,6 +451,13 @@ spec:
       cpu: "2"
       memory: "2Gi"
     logRetentionDays: 14
+    valuesFrom:
+      - configMapRef:
+          name: app-base-config
+      - configMapRef:
+          name: app-prod-config
+      - secretRef:
+          name: app-secrets
 ```
 
 This configuration:
@@ -293,6 +466,7 @@ This configuration:
 - Runs converge Jobs with 2 CPU and 2Gi memory limits
 - Retains completed Job logs for 14 days
 - Uses `werf-converge` ServiceAccount in the target namespace
+- Loads configuration values from three sources (base config, prod overrides, secrets)
 
 ## Troubleshooting Configuration Issues
 
@@ -347,3 +521,62 @@ kubectl logs job/my-app-<hash>-<uuid> -n k8s-werf-operator-go-system --tail=100
 # Check pod events for failures
 kubectl describe pod <pod-name> -n k8s-werf-operator-go-system
 ```
+
+### "Bundle marked Failed with 'ConfigMap not found'"
+
+Required ConfigMap or Secret is missing from both bundle and target namespaces:
+
+```bash
+# Check which source is missing from the error message
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# Look at status.lastErrorMessage for "source X: configMap ... not found"
+
+# Verify ConfigMap exists in the correct namespace
+kubectl get configmap app-config -n production
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+
+# Create the missing ConfigMap
+kubectl create configmap app-config --from-literal=values.yaml='
+app:
+  name: my-app
+' -n production
+```
+
+**Remember**: Bundle namespace is checked first, then target namespace. If you want admin control, put the ConfigMap in the bundle namespace (where the WerfBundle resource lives).
+
+### "Values not being applied to deployment"
+
+Check that valuesFrom sources contain valid YAML and are being resolved:
+
+```bash
+# Verify ConfigMap/Secret contains YAML data
+kubectl get configmap app-config -n production -o yaml
+
+# Check Job args to verify --set flags are present
+kubectl get job my-app-<hash>-<uuid> -n k8s-werf-operator-go-system -o yaml | grep -A 20 args:
+# Should see: --set key1=value1 --set key2=value2
+
+# Common issues:
+# 1. ConfigMap data keys don't contain YAML (should be key: "yaml content")
+# 2. YAML is malformed (use a YAML validator)
+# 3. Source marked as optional and is missing (not an error, just skipped)
+```
+
+### "Job args too long / argument list too long"
+
+Total size of all values exceeds Kubernetes command-line limits (~2MB):
+
+```bash
+# Check total size of all valuesFrom sources
+for cm in app-config base-config; do
+  echo "ConfigMap $cm:"
+  kubectl get configmap $cm -n production -o json | jq '.data | to_entries[] | .value | length'
+done
+
+# Solutions:
+# 1. Reduce number of values (remove unused config)
+# 2. Use fewer sources (merge ConfigMaps before operator processes them)
+# 3. Consider if some values can be hardcoded in bundle instead
+```
+
+This limit is rare but can occur with hundreds of configuration keys or very large values.

@@ -2,6 +2,7 @@
 package converge
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -15,12 +16,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
+	"github.com/werf/k8s-werf-operator-go/internal/values"
 )
 
 // Builder creates Kubernetes Jobs for werf converge operations.
 type Builder struct {
-	werf   *werfv1alpha1.WerfBundle
-	scheme *runtime.Scheme
+	werf           *werfv1alpha1.WerfBundle
+	scheme         *runtime.Scheme
+	valuesResolver values.Resolver
 }
 
 // NewBuilder creates a new Job builder for a WerfBundle.
@@ -34,14 +37,50 @@ func (b *Builder) WithScheme(scheme *runtime.Scheme) *Builder {
 	return b
 }
 
+// WithValuesResolver sets the values resolver for fetching configuration.
+func (b *Builder) WithValuesResolver(resolver values.Resolver) *Builder {
+	b.valuesResolver = resolver
+	return b
+}
+
 // Build creates a Kubernetes Job spec for werf converge.
 // The job name is deterministic based on bundle and tag to enable idempotency.
-func (b *Builder) Build(tag string) (*batchv1.Job, error) {
+// If valuesFrom is configured, resolves values and adds --set flags to the job.
+func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 	if b.werf == nil {
 		return nil, fmt.Errorf("WerfBundle is nil")
 	}
 
 	jobName := b.jobName(tag)
+
+	// Build base werf converge arguments
+	args := []string{
+		"converge",
+		"--log-color=false",
+		fmt.Sprintf("%s:%s", b.werf.Spec.Registry.URL, tag),
+	}
+
+	// Resolve values if configured
+	if len(b.werf.Spec.Converge.ValuesFrom) > 0 {
+		if b.valuesResolver == nil {
+			return nil, fmt.Errorf("values resolver required when valuesFrom is configured")
+		}
+
+		targetNs := values.GetTargetNamespace(&b.werf.Spec.Converge, b.werf.Namespace)
+		resolvedValues, err := b.valuesResolver.ResolveValues(
+			ctx,
+			b.werf.Spec.Converge.ValuesFrom,
+			b.werf.Namespace,
+			targetNs,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve values: %w", err)
+		}
+
+		// Add --set flags for resolved values
+		setFlags := values.GenerateSetFlags(resolvedValues)
+		args = append(args, setFlags...)
+	}
 
 	// Job retry policy: don't retry within the job, controller handles retries
 	backoffLimit := int32(0)
@@ -87,11 +126,7 @@ func (b *Builder) Build(tag string) (*batchv1.Job, error) {
 						{
 							Name:  "werf",
 							Image: "ghcr.io/werf/werf:latest",
-							Args: []string{
-								"converge",
-								"--log-color=false",
-								fmt.Sprintf("%s:%s", b.werf.Spec.Registry.URL, tag),
-							},
+							Args:  args,
 							// Resource limits prevent runaway werf processes
 							// Configurable via CRD in future phases
 							Resources: corev1.ResourceRequirements{

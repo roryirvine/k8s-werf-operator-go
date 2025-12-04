@@ -89,6 +89,12 @@ type ConvergeConfig struct {
 	// +kubebuilder:validation:MinLength=1
 	ServiceAccountName string `json:"serviceAccountName"`
 
+	// TargetNamespace is the namespace where werf converge will deploy resources.
+	// If not specified, defaults to the bundle's namespace.
+	// This is also used as the fallback namespace when looking up values from ConfigMaps and Secrets.
+	// +kubebuilder:validation:Optional
+	TargetNamespace string `json:"targetNamespace,omitempty"`
+
 	// ResourceLimits specifies CPU and memory limits for werf converge jobs.
 	// If not specified, defaults are used: 1 CPU and 1Gi memory.
 	// +kubebuilder:validation:Optional
@@ -101,6 +107,13 @@ type ConvergeConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default:=7
 	LogRetentionDays *int32 `json:"logRetentionDays,omitempty"`
+
+	// ValuesFrom is a list of sources to populate configuration values for werf converge.
+	// Each source is treated as a YAML document and merged in array order.
+	// Later sources take precedence over earlier ones in case of key conflicts.
+	// Each entry must specify exactly one of ConfigMapRef or SecretRef.
+	// +kubebuilder:validation:Optional
+	ValuesFrom []ValuesSource `json:"valuesFrom,omitempty"`
 }
 
 // ResourceLimitsConfig specifies CPU and memory limits for jobs.
@@ -112,6 +125,30 @@ type ResourceLimitsConfig struct {
 	// Memory is the memory limit as a string (e.g., "512Mi", "1Gi", "2G").
 	// +kubebuilder:validation:Optional
 	Memory string `json:"memory,omitempty"`
+}
+
+// ValuesSource represents a source of configuration values for werf converge.
+// The entire ConfigMap or Secret is treated as YAML data and merged with other sources.
+// Values are passed to werf converge as --set flags.
+// Exactly one of ConfigMapRef or SecretRef must be set.
+// +kubebuilder:validation:XValidation:rule="(has(self.configMapRef) && !has(self.secretRef)) || (!has(self.configMapRef) && has(self.secretRef))",message="exactly one of configMapRef or secretRef must be set"
+type ValuesSource struct {
+	// ConfigMapRef is a reference to a ConfigMap containing values as YAML data.
+	// The ConfigMap is looked up first in the WerfBundle's namespace, then in the target namespace.
+	// +kubebuilder:validation:Optional
+	ConfigMapRef *corev1.LocalObjectReference `json:"configMapRef,omitempty"`
+
+	// SecretRef is a reference to a Secret containing values as YAML data.
+	// The Secret is looked up first in the WerfBundle's namespace, then in the target namespace.
+	// +kubebuilder:validation:Optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// Optional specifies whether this values source is required.
+	// If false (default), the deployment fails if the ConfigMap or Secret is not found.
+	// If true, the deployment proceeds even if the resource is missing.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=false
+	Optional bool `json:"optional,omitempty"`
 }
 
 // WerfBundleStatus defines the observed state of WerfBundle.

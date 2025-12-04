@@ -40,3 +40,5 @@ cover.out
 .notes/
 CLAUDE.md
 
+.env
+.mcp.json

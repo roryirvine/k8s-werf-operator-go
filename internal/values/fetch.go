@@ -2,6 +2,7 @@ package values
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,6 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// ErrNotFound indicates a ConfigMap or Secret was not found in any searched namespace.
+var ErrNotFound = errors.New("resource not found")
 
 // fetchConfigMap retrieves a ConfigMap from either the bundle namespace or target namespace.
 // It searches the bundle namespace first (admin-controlled values), then the target namespace.
@@ -61,11 +65,11 @@ func fetchConfigMap(
 
 	// Not found in either namespace
 	if targetNamespace != "" && targetNamespace != bundleNamespace {
-		return nil, fmt.Errorf("configMap %q not found in namespaces %q or %q",
-			name, bundleNamespace, targetNamespace)
+		return nil, fmt.Errorf("configMap %q not found in namespaces %q or %q: %w",
+			name, bundleNamespace, targetNamespace, ErrNotFound)
 	}
-	return nil, fmt.Errorf("configMap %q not found in namespace %q",
-		name, bundleNamespace)
+	return nil, fmt.Errorf("configMap %q not found in namespace %q: %w",
+		name, bundleNamespace, ErrNotFound)
 }
 
 // fetchSecret retrieves a Secret from either the bundle namespace or target namespace.
@@ -119,11 +123,11 @@ func fetchSecret(
 
 	// Not found in either namespace
 	if targetNamespace != "" && targetNamespace != bundleNamespace {
-		return nil, fmt.Errorf("secret %q not found in namespaces %q or %q",
-			name, bundleNamespace, targetNamespace)
+		return nil, fmt.Errorf("secret %q not found in namespaces %q or %q: %w",
+			name, bundleNamespace, targetNamespace, ErrNotFound)
 	}
-	return nil, fmt.Errorf("secret %q not found in namespace %q",
-		name, bundleNamespace)
+	return nil, fmt.Errorf("secret %q not found in namespace %q: %w",
+		name, bundleNamespace, ErrNotFound)
 }
 
 // secretDataToStringMap converts Secret.Data (map[string][]byte) to map[string]string.

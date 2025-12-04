@@ -3,8 +3,8 @@ package values
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -76,10 +76,6 @@ func isNotFoundError(err error) bool {
 	if apierrors.IsNotFound(err) {
 		return true
 	}
-	// Check for our custom "not found" errors from fetch functions
-	// (These contain "not found" in the error message)
-	if err != nil {
-		return strings.Contains(err.Error(), "not found")
-	}
-	return false
+	// Check for our custom ErrNotFound sentinel error from fetch functions
+	return errors.Is(err, ErrNotFound)
 }

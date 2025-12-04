@@ -11,52 +11,52 @@ func TestEscapeValue(t *testing.T) {
 		{
 			name:  "Simple alphanumeric value",
 			value: "hello",
-			want:  `"hello"`,
+			want:  "hello",
 		},
 		{
 			name:  "Value with spaces",
 			value: "hello world",
-			want:  `"hello world"`,
+			want:  "hello world",
 		},
 		{
 			name:  "Empty value",
 			value: "",
-			want:  `""`,
+			want:  "",
 		},
 		{
-			name:  "Value with double quotes",
-			value: `say "hello"`,
-			want:  `"say \"hello\""`,
+			name:  "Value with commas (Helm separator)",
+			value: "value,with,commas",
+			want:  `value\,with\,commas`,
 		},
 		{
-			name:  "Value with single quotes",
-			value: "it's working",
-			want:  `"it's working"`,
-		},
-		{
-			name:  "Value with equals signs",
+			name:  "Value with equals signs (Helm key=value separator)",
 			value: "key=value",
-			want:  `"key=value"`,
-		},
-		{
-			name:  "Value with newlines",
-			value: "line1\nline2",
-			want:  `"line1\nline2"`,
+			want:  `key\=value`,
 		},
 		{
 			name:  "Value with backslashes",
 			value: `C:\path\to\file`,
-			want:  `"C:\\path\\to\\file"`,
+			want:  `C:\\path\\to\\file`,
 		},
 		{
-			name:  "Value with tabs",
-			value: "col1\tcol2",
-			want:  `"col1\tcol2"`,
+			name:  "Value with brackets (Helm array notation)",
+			value: "servers[0]",
+			want:  `servers\[0\]`,
 		},
 		{
-			name:  "Value with mixed special characters",
-			value: "path=\"C:\\data\"\nkey=value\ttab",
-			want:  `"path=\"C:\\data\"\nkey=value\ttab"`,
+			name:  "Value with multiple special characters",
+			value: "path=value,with[brackets]",
+			want:  `path\=value\,with\[brackets\]`,
+		},
+		{
+			name:  "Backslash before other special chars",
+			value: `\,\=\[\]`,
+			want:  `\\\,\\\=\\\[\\\]`,
+		},
+		{
+			name:  "Database connection string",
+			value: "postgres://user:pass@localhost:5432/db",
+			want:  `postgres://user:pass@localhost:5432/db`,
 		},
 	}
 

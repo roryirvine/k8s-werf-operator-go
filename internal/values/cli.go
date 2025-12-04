@@ -1,29 +1,38 @@
 // Package values provides utilities for resolving configuration values from ConfigMaps and Secrets.
 package values
 
-import "strconv"
+import "strings"
 
-// escapeValue escapes a value string for safe use in CLI arguments by wrapping it in quotes
-// and escaping special characters. This provides defense-in-depth protection even though the
-// arguments are passed via exec.Command (which doesn't involve shell interpretation).
+// escapeValue escapes special characters in a value string for use in Helm --set arguments.
+// Werf uses Helm under the hood, so we follow Helm's escaping conventions.
 //
-// The escaping ensures values are safe in case they're:
-//   - Logged or displayed in error messages
-//   - Used in contexts where shell interpretation might occur
-//   - Passed to werf, which may have its own parsing requirements
+// Helm requires backslash-escaping for these special characters:
+//   - Backslash (\) - must be escaped first to avoid double-escaping
+//   - Comma (,) - Helm's value separator in --set key1=val1,key2=val2
+//   - Equals (=) - Helm's key=value separator
+//   - Brackets ([, ]) - used in array notation like servers[0].name
 //
-// Uses strconv.Quote for robust handling of all special characters including:
-//   - Spaces and tabs
-//   - Double quotes and single quotes
-//   - Newlines and other control characters
-//   - Backslashes and escape sequences
-//   - Equals signs and other shell metacharacters
+// The format is key=value with NO surrounding quotes. Helm handles the value parsing.
 //
 // Examples:
-//   - "hello" -> "\"hello\""
-//   - "value with spaces" -> "\"value with spaces\""
-//   - "say \"hello\"" -> "\"say \\\"hello\\\"\""
-//   - "line1\nline2" -> "\"line1\\nline2\""
+//   - "hello" -> "hello" (no change)
+//   - "value,with,commas" -> "value\,with\,commas"
+//   - "key=value" -> "key\=value"
+//   - "path\to\file" -> "path\\to\\file"
+//   - "servers[0]" -> "servers\[0\]"
+//
+// References:
+//   - https://helm.sh/docs/intro/using_helm/
+//   - https://werf.io/documentation/v1.2/reference/cli/werf_converge.html
 func escapeValue(value string) string {
-	return strconv.Quote(value)
+	// Escape backslashes first to avoid double-escaping
+	result := strings.ReplaceAll(value, `\`, `\\`)
+
+	// Escape Helm special characters
+	result = strings.ReplaceAll(result, ",", `\,`)
+	result = strings.ReplaceAll(result, "=", `\=`)
+	result = strings.ReplaceAll(result, "[", `\[`)
+	result = strings.ReplaceAll(result, "]", `\]`)
+
+	return result
 }

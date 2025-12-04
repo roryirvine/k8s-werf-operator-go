@@ -61,7 +61,10 @@
       "Bash(gh label list:*)",
       "Bash(gh api:*)",
       "Bash(gh project:*)",
-      "Bash(gh issue edit:*)"
+      "Bash(gh issue edit:*)",
+      "mcp__github__issue_read",
+      "mcp__github__get_me",
+      "WebFetch(domain:werf.io)"
     ],
     "deny": [],
     "ask": []

@@ -86,10 +86,12 @@ type RegistryConfig struct {
 // ConvergeConfig contains configuration for deploying the bundle with werf converge.
 type ConvergeConfig struct {
 	// ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
-	// This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
-	// +kubebuilder:validation:Required
+	// Required for cross-namespace deployments (when TargetNamespace differs from bundle namespace).
+	// Optional for same-namespace deployments (backward compatibility with default ServiceAccount).
+	// When specified, the ServiceAccount must exist in the target namespace.
+	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MinLength=1
-	ServiceAccountName string `json:"serviceAccountName"`
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 
 	// TargetNamespace is the namespace where werf converge will deploy resources.
 	// If not specified, defaults to the bundle's namespace.

@@ -86,7 +86,9 @@ spec:
                   serviceAccountName:
                     description: |-
                       ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
-                      This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
+                      Required for cross-namespace deployments (when TargetNamespace differs from bundle namespace).
+                      Optional for same-namespace deployments (backward compatibility with default ServiceAccount).
+                      When specified, the ServiceAccount must exist in the target namespace.
                     minLength: 1
                     type: string
                   targetNamespace:
@@ -154,8 +156,6 @@ spec:
                         rule: (has(self.configMapRef) && !has(self.secretRef)) ||
                           (!has(self.configMapRef) && has(self.secretRef))
                     type: array
-                required:
-                - serviceAccountName
                 type: object
               registry:
                 description: Registry contains configuration for accessing the OCI

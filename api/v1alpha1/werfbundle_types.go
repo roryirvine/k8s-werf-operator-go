@@ -38,7 +38,8 @@ const (
 )
 
 // WerfBundleSpec defines the desired state of WerfBundle.
-// Example:
+//
+// Example (same-namespace deployment):
 //
 //	apiVersion: werf.io/v1alpha1
 //	kind: WerfBundle
@@ -53,6 +54,22 @@ const (
 //	    pollInterval: 15m
 //	  converge:
 //	    serviceAccountName: werf-converge
+//
+// Example (cross-namespace deployment):
+//
+//	apiVersion: werf.io/v1alpha1
+//	kind: WerfBundle
+//	metadata:
+//	  name: my-app
+//	  namespace: operator-system
+//	spec:
+//	  registry:
+//	    url: ghcr.io/org/bundle
+//	    secretRef:
+//	      name: registry-creds
+//	  converge:
+//	    targetNamespace: my-app-prod
+//	    serviceAccountName: werf-deploy
 type WerfBundleSpec struct {
 	// Registry contains configuration for accessing the OCI registry where the bundle is stored.
 	// +kubebuilder:validation:Required

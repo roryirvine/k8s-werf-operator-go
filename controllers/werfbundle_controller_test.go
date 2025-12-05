@@ -2060,7 +2060,8 @@ func TestReconcile_CrossNamespaceWithoutSA_FailsValidation(t *testing.T) {
 		t.Errorf("expected phase Failed, got %s", updatedBundle.Status.Phase)
 	}
 
-	if !strings.Contains(updatedBundle.Status.LastErrorMessage, "serviceAccountName is required for cross-namespace deployment") {
+	expectedErr := "serviceAccountName is required for cross-namespace deployment"
+	if !strings.Contains(updatedBundle.Status.LastErrorMessage, expectedErr) {
 		t.Errorf("expected validation error message, got: %s", updatedBundle.Status.LastErrorMessage)
 	}
 

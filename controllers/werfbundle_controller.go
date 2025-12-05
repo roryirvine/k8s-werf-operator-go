@@ -109,11 +109,25 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// Validate ServiceAccount exists before attempting to create Job
-	if err := r.validateServiceAccount(ctx, bundle); err != nil {
-		// Status was already updated to Failed by validateServiceAccount
+	// Validate cross-namespace deployment requirements
+	if err := bundle.ValidateCrossNamespaceDeployment(); err != nil {
+		log.Error(err, "cross-namespace validation failed")
+		if updateErr := r.updateStatusFailed(ctx, bundle, err.Error()); updateErr != nil {
+			log.Error(updateErr, "failed to update status after validation failure")
+			return ctrl.Result{}, updateErr
+		}
 		// Return success (no error) but stop processing further
 		return ctrl.Result{}, nil
+	}
+
+	// Validate ServiceAccount exists before attempting to create Job
+	// Skip validation if ServiceAccountName is not set (same-namespace with default SA)
+	if bundle.Spec.Converge.ServiceAccountName != "" {
+		if err := r.validateServiceAccount(ctx, bundle); err != nil {
+			// Status was already updated to Failed by validateServiceAccount
+			// Return success (no error) but stop processing further
+			return ctrl.Result{}, nil
+		}
 	}
 
 	// Parse poll interval from spec, default to 15 minutes

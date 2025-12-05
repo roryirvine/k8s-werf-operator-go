@@ -624,10 +624,10 @@ func TestWerfBundleValidation(t *testing.T) {
 
 func TestCrossNamespaceValidation(t *testing.T) {
 	tests := []struct {
-		name            string
-		bundle          *WerfBundle
-		wantErr         bool
-		errContains     string
+		name        string
+		bundle      *WerfBundle
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name: "same-namespace deployment without ServiceAccountName - valid",

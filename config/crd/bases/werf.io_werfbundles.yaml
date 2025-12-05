@@ -50,11 +50,16 @@ spec:
           metadata:
             type: object
           spec:
-            description: "WerfBundleSpec defines the desired state of WerfBundle.\nExample:\n\n\tapiVersion:
+            description: "WerfBundleSpec defines the desired state of WerfBundle.\n\nExample
+              (same-namespace deployment):\n\n\tapiVersion: werf.io/v1alpha1\n\tkind:
+              WerfBundle\n\tmetadata:\n\t  name: my-app\n\t  namespace: default\n\tspec:\n\t
+              \ registry:\n\t    url: ghcr.io/org/bundle\n\t    secretRef:\n\t      name:
+              registry-creds\n\t    pollInterval: 15m\n\t  converge:\n\t    serviceAccountName:
+              werf-converge\n\nExample (cross-namespace deployment):\n\n\tapiVersion:
               werf.io/v1alpha1\n\tkind: WerfBundle\n\tmetadata:\n\t  name: my-app\n\t
-              \ namespace: default\n\tspec:\n\t  registry:\n\t    url: ghcr.io/org/bundle\n\t
-              \   secretRef:\n\t      name: registry-creds\n\t    pollInterval: 15m\n\t
-              \ converge:\n\t    serviceAccountName: werf-converge"
+              \ namespace: operator-system\n\tspec:\n\t  registry:\n\t    url: ghcr.io/org/bundle\n\t
+              \   secretRef:\n\t      name: registry-creds\n\t  converge:\n\t    targetNamespace:
+              my-app-prod\n\t    serviceAccountName: werf-deploy"
             properties:
               converge:
                 description: Converge contains configuration for deploying the bundle

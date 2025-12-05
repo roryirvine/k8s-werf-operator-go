@@ -2154,3 +2154,89 @@ func TestReconcile_SameNamespaceWithoutSA_CreatesJob(t *testing.T) {
 		t.Error("expected job to be created for same-namespace deployment without SA")
 	}
 }
+
+func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
+	ctx := context.Background()
+
+	// Create the ServiceAccount that the bundle references
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "werf-deploy",
+			Namespace: "default",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cross-ns-with-sa",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "target-ns",
+				ServiceAccountName: "werf-deploy",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-cross-ns-with-sa", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Check bundle status is Syncing (job created)
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing, got %s", updatedBundle.Status.Phase)
+	}
+
+	if updatedBundle.Status.LastErrorMessage != "" {
+		t.Errorf("expected no error message, got: %s", updatedBundle.Status.LastErrorMessage)
+	}
+
+	// Job should be created
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	jobCount := 0
+	for _, job := range jobs.Items {
+		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == "test-cross-ns-with-sa" {
+			jobCount++
+		}
+	}
+
+	if jobCount == 0 {
+		t.Error("expected job to be created for cross-namespace deployment with SA")
+	}
+}

@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -229,6 +231,30 @@ type WerfBundleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WerfBundle `json:"items"`
+}
+
+// ValidateCrossNamespaceDeployment checks if ServiceAccountName is required for cross-namespace deployment.
+// Returns an error if TargetNamespace differs from bundle namespace but ServiceAccountName is not set.
+// For same-namespace deployments (TargetNamespace empty or equals bundle namespace), ServiceAccountName is optional.
+func (wb *WerfBundle) ValidateCrossNamespaceDeployment() error {
+	targetNs := wb.Spec.Converge.TargetNamespace
+	bundleNs := wb.Namespace
+	saName := wb.Spec.Converge.ServiceAccountName
+
+	// If TargetNamespace is empty or equals bundle namespace, it's same-namespace deployment
+	if targetNs == "" || targetNs == bundleNs {
+		return nil
+	}
+
+	// Cross-namespace deployment requires ServiceAccountName
+	if saName == "" {
+		return fmt.Errorf(
+			"serviceAccountName is required for cross-namespace deployment from %s to %s",
+			bundleNs, targetNs,
+		)
+	}
+
+	return nil
 }
 
 func init() {

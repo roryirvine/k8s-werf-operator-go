@@ -1,4 +1,28 @@
 // Package rbac provides RBAC validation utilities for the Werf operator.
+//
+// This package focuses on pre-flight validation of deployment prerequisites to provide
+// clear, immediate error messages before Job creation. It intentionally performs best-effort
+// checks rather than comprehensive RBAC validation.
+//
+// Design Philosophy:
+//
+// We validate ServiceAccount existence but NOT permissions. This is a deliberate trade-off:
+//
+// What we check:
+//   - ServiceAccount exists in target namespace
+//
+// What we don't check (and why):
+//   - RoleBinding existence: Too complex, requires checking multiple binding types
+//   - Permission adequacy: Would require simulating kubectl auth can-i for every operation
+//   - Namespace existence: Job creation will fail fast with clear error if namespace missing
+//
+// This approach catches the most common configuration mistake (missing ServiceAccount)
+// while avoiding the complexity and maintenance burden of comprehensive permission validation.
+// If the ServiceAccount lacks proper permissions, the Job will fail with Kubernetes RBAC
+// errors that clearly indicate the permission problem.
+//
+// This is a pre-flight check for better UX, not a security guarantee. Users are responsible
+// for configuring proper RBAC permissions in their target namespaces.
 package rbac
 
 import (

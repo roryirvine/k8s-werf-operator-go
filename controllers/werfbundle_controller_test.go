@@ -2158,11 +2158,21 @@ func TestReconcile_SameNamespaceWithoutSA_CreatesJob(t *testing.T) {
 func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
 	ctx := context.Background()
 
-	// Create the ServiceAccount that the bundle references
+	// Create target namespace
+	targetNs := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "target-ns",
+		},
+	}
+	if err := testk8sClient.Create(ctx, targetNs); err != nil {
+		t.Fatalf("failed to create target namespace: %v", err)
+	}
+
+	// Create the ServiceAccount in the target namespace (where Job will run)
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "werf-deploy",
-			Namespace: "default",
+			Namespace: "target-ns",
 		},
 	}
 	if err := testk8sClient.Create(ctx, sa); err != nil {

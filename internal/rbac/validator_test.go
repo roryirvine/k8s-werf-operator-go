@@ -55,15 +55,20 @@ func TestValidateServiceAccountExists(t *testing.T) {
 			wantErrSubstr: "ServiceAccount 'werf-deploy' not found in namespace 'other-ns'",
 		},
 		{
-			name:        "Error message includes both name and namespace",
-			saName:      "test-sa",
-			saNamespace: "test-namespace",
-			existingSA:  nil,
-			wantErr:     true,
-			wantErrSubstr: func() string {
-				// Verify error contains both name and namespace
-				return "test-sa"
-			}(),
+			name:          "Error message includes SA name",
+			saName:        "test-sa",
+			saNamespace:   "test-namespace",
+			existingSA:    nil,
+			wantErr:       true,
+			wantErrSubstr: "test-sa",
+		},
+		{
+			name:          "Error message includes namespace",
+			saName:        "test-sa",
+			saNamespace:   "test-namespace",
+			existingSA:    nil,
+			wantErr:       true,
+			wantErrSubstr: "test-namespace",
 		},
 	}
 
@@ -94,13 +99,6 @@ func TestValidateServiceAccountExists(t *testing.T) {
 				}
 				if !strings.Contains(err.Error(), tt.wantErrSubstr) {
 					t.Errorf("error message %q does not contain %q", err.Error(), tt.wantErrSubstr)
-				}
-				// For the last test, also verify namespace is in error
-				if tt.name == "Error message includes both name and namespace" {
-					if !strings.Contains(err.Error(), tt.saNamespace) {
-						t.Errorf("error message %q does not contain namespace %q",
-							err.Error(), tt.saNamespace)
-					}
 				}
 			} else {
 				if err != nil {

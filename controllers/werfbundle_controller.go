@@ -21,6 +21,7 @@ import (
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	"github.com/werf/k8s-werf-operator-go/internal/converge"
+	"github.com/werf/k8s-werf-operator-go/internal/rbac"
 	"github.com/werf/k8s-werf-operator-go/internal/registry"
 	"github.com/werf/k8s-werf-operator-go/internal/values"
 )
@@ -189,7 +190,7 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return r.ensureJobExists(ctx, bundle, latestTag)
 }
 
-// validateServiceAccount checks that the ServiceAccount exists in the bundle's namespace.
+// validateServiceAccount checks that the ServiceAccount exists in the target namespace.
 // Returns error if SA doesn't exist or if status update fails. If SA is not found,
 // status is updated to Failed before returning the error to prevent job creation.
 func (r *WerfBundleReconciler) validateServiceAccount(
@@ -198,25 +199,24 @@ func (r *WerfBundleReconciler) validateServiceAccount(
 ) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	saKey := types.NamespacedName{
-		Name:      bundle.Spec.Converge.ServiceAccountName,
-		Namespace: bundle.Namespace,
-	}
-	sa := &corev1.ServiceAccount{}
-	if err := r.Get(ctx, saKey, sa); err != nil {
-		if apierrors.IsNotFound(err) {
-			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
-				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
-			log.Info("ServiceAccount not found", "serviceAccount", saKey)
-			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
-				log.Error(err, "failed to update status after SA validation")
-				return err
-			}
-			// Return a sentinel error to stop processing and prevent job creation
-			return errors.New("serviceaccount not found")
+	// Calculate target namespace - this is where the Job will run
+	targetNamespace := values.GetTargetNamespace(&bundle.Spec.Converge, bundle.Namespace)
+
+	// Validate ServiceAccount exists in target namespace
+	err := rbac.ValidateServiceAccountExists(
+		ctx,
+		r.Client,
+		bundle.Spec.Converge.ServiceAccountName,
+		targetNamespace,
+	)
+	if err != nil {
+		log.Error(err, "ServiceAccount validation failed")
+		if updateErr := r.updateStatusFailed(ctx, bundle, err.Error()); updateErr != nil {
+			log.Error(updateErr, "failed to update status after SA validation")
+			return updateErr
 		}
-		log.Error(err, "failed to get ServiceAccount")
-		return err
+		// Return a sentinel error to stop processing and prevent job creation
+		return errors.New("serviceaccount validation failed")
 	}
 	return nil
 }

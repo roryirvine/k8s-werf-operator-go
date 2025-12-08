@@ -225,6 +225,12 @@ type WerfBundleStatus struct {
 	// Provides debugging visibility without requiring external log aggregation.
 	// +kubebuilder:validation:Optional
 	LastJobLogs string `json:"lastJobLogs,omitempty"`
+
+	// ResolvedTargetNamespace is the namespace where the bundle is deployed.
+	// Defaults to bundle namespace if TargetNamespace is not set in spec.
+	// Provides visibility for debugging cross-namespace deployments.
+	// +kubebuilder:validation:Optional
+	ResolvedTargetNamespace string `json:"resolvedTargetNamespace,omitempty"`
 }
 
 // +kubebuilder:object:root=true

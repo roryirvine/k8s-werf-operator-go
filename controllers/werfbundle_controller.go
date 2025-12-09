@@ -387,7 +387,7 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 		bundle.Status.ActiveJobName = ""
 
 		// Capture job logs for debugging
-		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, job.Namespace)
 		if err != nil {
 			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
 		} else {
@@ -413,7 +413,7 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 		bundle.Status.ActiveJobName = ""
 
 		// Capture job logs for debugging
-		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, job.Namespace)
 		if err != nil {
 			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
 		} else {

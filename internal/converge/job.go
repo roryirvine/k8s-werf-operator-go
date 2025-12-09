@@ -151,18 +151,26 @@ func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 	// Use regular owner reference (not controller reference) to support cross-namespace deployments.
 	// Note: Cross-namespace owner references don't support automatic garbage collection,
 	// so manual cleanup may be needed in the WerfBundle finalizer in future phases.
-	if b.scheme != nil {
-		gvks, _, err := b.scheme.ObjectKinds(b.werf)
-		if err == nil && len(gvks) > 0 {
-			job.OwnerReferences = []metav1.OwnerReference{
-				{
-					APIVersion: gvks[0].GroupVersion().String(),
-					Kind:       gvks[0].Kind,
-					Name:       b.werf.Name,
-					UID:        b.werf.UID,
-				},
-			}
-		}
+	if b.scheme == nil {
+		return nil, fmt.Errorf("scheme is required to set owner reference and prevent orphaned jobs")
+	}
+
+	gvks, _, err := b.scheme.ObjectKinds(b.werf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get GroupVersionKind for WerfBundle: %w", err)
+	}
+
+	if len(gvks) == 0 {
+		return nil, fmt.Errorf("no GroupVersionKind found for WerfBundle (scheme may not have WerfBundle registered)")
+	}
+
+	job.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: gvks[0].GroupVersion().String(),
+			Kind:       gvks[0].Kind,
+			Name:       b.werf.Name,
+			UID:        b.werf.UID,
+		},
 	}
 
 	return job, nil

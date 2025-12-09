@@ -121,6 +121,16 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	// Calculate and store the resolved target namespace in status for visibility
+	targetNamespace := values.GetTargetNamespace(&bundle.Spec.Converge, bundle.Namespace)
+	if bundle.Status.ResolvedTargetNamespace != targetNamespace {
+		bundle.Status.ResolvedTargetNamespace = targetNamespace
+		if err := r.Status().Update(ctx, bundle); err != nil {
+			log.Error(err, "failed to update resolved target namespace in status")
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Validate ServiceAccount exists before attempting to create Job
 	// Skip validation if ServiceAccountName is not set (same-namespace with default SA)
 	if bundle.Spec.Converge.ServiceAccountName != "" {

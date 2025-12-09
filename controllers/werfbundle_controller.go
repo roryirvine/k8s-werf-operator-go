@@ -64,6 +64,28 @@ type WerfBundleReconciler struct {
 	Clientset      kubernetes.Interface
 }
 
+// Operator RBAC permissions - cluster-wide scope for cross-namespace deployments
+//
+// These kubebuilder markers generate a ClusterRole with cluster-wide permissions.
+// The operator needs cluster-wide read access to support cross-namespace deployments
+// where WerfBundles in one namespace deploy to different target namespaces.
+//
+// Secrets: Cluster-wide read access (get) for:
+//   - Registry credentials in target namespaces
+//   - Values resolution from Secrets in target namespaces
+//
+// ServiceAccounts: Cluster-wide read access (get, list, watch) for:
+//   - Pre-flight validation that target SA exists before Job creation
+//
+// ConfigMaps: Cluster-wide read/write access (create, update, get, list) for:
+//   - Values resolution from target namespaces
+//   - Status tracking and caching (operator namespace only in practice)
+//
+// Security note: Operator has cluster-wide read permissions but Jobs execute
+// with target namespace ServiceAccount permissions (namespace-scoped). The operator
+// reads configuration; Jobs execute deployments. See docs/security-model.md for
+// the complete security model and single-tenant deployment assumptions.
+
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;get;list;watch;delete

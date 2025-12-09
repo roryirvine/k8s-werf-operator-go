@@ -2255,6 +2255,70 @@ func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
 	}
 }
 
+func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-same-ns-job",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "default",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-same-ns-job", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Job should be created in bundle namespace (same-namespace deployment)
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	var createdJob *batchv1.Job
+	for i := range jobs.Items {
+		if len(jobs.Items[i].OwnerReferences) > 0 &&
+			jobs.Items[i].OwnerReferences[0].Name == "test-same-ns-job" {
+			createdJob = &jobs.Items[i]
+			break
+		}
+	}
+
+	if createdJob == nil {
+		t.Error("expected job to be created for same-namespace deployment")
+	} else if createdJob.Namespace != "default" {
+		t.Errorf("expected job in default (bundle namespace), got %s", createdJob.Namespace)
+	}
+}
+
 func TestReconcile_SameNamespace_SetsResolvedTargetNamespace(t *testing.T) {
 	ctx := context.Background()
 

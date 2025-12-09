@@ -2155,6 +2155,19 @@ func TestReconcile_SameNamespaceWithoutSA_CreatesJob(t *testing.T) {
 	}
 }
 
+// RBAC Note: The following cross-namespace tests use a fake Kubernetes client which
+// simulates cluster-wide permissions. The operator's ClusterRole grants cluster-wide
+// read access to Secrets, ServiceAccounts, and ConfigMaps, enabling cross-namespace
+// deployments where WerfBundles in one namespace deploy to different target namespaces.
+//
+// In production, these permissions are provided by config/rbac/role.yaml (ClusterRole)
+// bound via config/rbac/role_binding.yaml (ClusterRoleBinding). The fake client doesn't
+// enforce RBAC, so these tests verify the code logic works correctly when cluster-wide
+// permissions are available.
+//
+// See docs/security-model.md for the complete security model and single-tenant
+// deployment assumptions.
+
 func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
 	ctx := context.Background()
 

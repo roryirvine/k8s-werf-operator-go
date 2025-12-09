@@ -230,9 +230,9 @@ func TestBuilder_Build_OwnerReference(t *testing.T) {
 		t.Errorf("owner UID: got %q, want %q", ownerRef.UID, "test-uid-123")
 	}
 
-	trueVal := true
-	if ownerRef.Controller == nil || *ownerRef.Controller != trueVal {
-		t.Error("expected controller to be true")
+	// Controller reference not set - we use regular owner references for cross-namespace support
+	if ownerRef.Controller != nil && *ownerRef.Controller {
+		t.Error("expected controller to be false or nil for regular owner reference (not controller reference)")
 	}
 }
 

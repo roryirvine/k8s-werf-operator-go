@@ -2232,22 +2232,26 @@ func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
 		t.Errorf("expected no error message, got: %s", updatedBundle.Status.LastErrorMessage)
 	}
 
-	// Job should be created
+	// Job should be created in target namespace
 	jobs := &batchv1.JobList{}
-	opts := &client.ListOptions{Namespace: "default"}
+	opts := &client.ListOptions{Namespace: "target-ns"}
 	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
 		t.Fatalf("failed to list jobs: %v", err)
 	}
 
-	jobCount := 0
-	for _, job := range jobs.Items {
-		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == "test-cross-ns-with-sa" {
-			jobCount++
+	var createdJob *batchv1.Job
+	for i := range jobs.Items {
+		if len(jobs.Items[i].OwnerReferences) > 0 &&
+			jobs.Items[i].OwnerReferences[0].Name == "test-cross-ns-with-sa" {
+			createdJob = &jobs.Items[i]
+			break
 		}
 	}
 
-	if jobCount == 0 {
+	if createdJob == nil {
 		t.Error("expected job to be created for cross-namespace deployment with SA")
+	} else if createdJob.Namespace != "target-ns" {
+		t.Errorf("expected job in target-ns, got %s", createdJob.Namespace)
 	}
 }
 

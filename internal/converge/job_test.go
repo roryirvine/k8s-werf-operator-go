@@ -644,3 +644,45 @@ func TestBuilder_Build_UniqueUUIDs(t *testing.T) {
 		t.Errorf("expected 10 unique UUIDs, got %d", len(uuids))
 	}
 }
+
+func TestBuilder_Build_MissingScheme(t *testing.T) {
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-app",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+			},
+		},
+	}
+
+	// Build without setting scheme - scheme is required to determine owner reference
+	builder := NewBuilder(bundle)
+	job, err := builder.Build(context.Background(), "v1.0.0")
+
+	if err == nil {
+		t.Fatal("expected error when scheme is nil, got nil")
+	}
+
+	if job != nil {
+		t.Error("expected nil job when scheme is missing, got a job")
+	}
+
+	if !contains(err.Error(), "scheme") {
+		t.Errorf("expected error about missing scheme, got: %v", err)
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

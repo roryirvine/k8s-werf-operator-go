@@ -295,13 +295,16 @@ func (r *WerfBundleReconciler) ensureJobExists(
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 
+	// Calculate target namespace - Jobs are created in target namespace
+	targetNamespace := values.GetTargetNamespace(&bundle.Spec.Converge, bundle.Namespace)
+
 	log.Info("new tag found, ensuring converge job exists", "tag", latestTag)
 
 	// Check if we already have an active job running (deduplication)
 	if bundle.Status.ActiveJobName != "" {
 		jobKey := types.NamespacedName{
 			Name:      bundle.Status.ActiveJobName,
-			Namespace: bundle.Namespace,
+			Namespace: targetNamespace,
 		}
 		activeJob := &batchv1.Job{}
 		if err := r.Get(ctx, jobKey, activeJob); err != nil {

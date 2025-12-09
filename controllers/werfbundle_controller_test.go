@@ -2268,7 +2268,7 @@ func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
 				URL: "ghcr.io/test/bundle",
 			},
 			Converge: werfv1alpha1.ConvergeConfig{
-				ServiceAccountName: "default",
+				// No ServiceAccountName set - tests backward compatibility for same-namespace deployments
 			},
 		},
 	}
@@ -2332,7 +2332,7 @@ func TestReconcile_SameNamespace_SetsResolvedTargetNamespace(t *testing.T) {
 				URL: "ghcr.io/test/bundle",
 			},
 			Converge: werfv1alpha1.ConvergeConfig{
-				ServiceAccountName: "default",
+				// No ServiceAccountName set - tests backward compatibility for same-namespace deployments
 			},
 		},
 	}

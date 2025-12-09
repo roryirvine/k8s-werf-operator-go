@@ -264,6 +264,12 @@ spec:
                 - Synced
                 - Failed
                 type: string
+              resolvedTargetNamespace:
+                description: |-
+                  ResolvedTargetNamespace is the namespace where the bundle is deployed.
+                  Defaults to bundle namespace if TargetNamespace is not set in spec.
+                  Provides visibility for debugging cross-namespace deployments.
+                type: string
             type: object
         type: object
     served: true

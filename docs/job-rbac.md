@@ -20,6 +20,51 @@ With split RBAC:
 - Each target namespace is isolated (compromise of one doesn't affect others)
 - Different teams can manage operator vs application permissions separately
 
+## Operator Permissions (ClusterRole)
+
+The operator itself runs with a **ClusterRole** that grants cluster-wide permissions for specific resources:
+
+### Cluster-Wide Read Access
+
+| Resource | Verbs | Why Needed |
+|----------|-------|------------|
+| Secrets | `get` | Read registry credentials and values from target namespaces |
+| ServiceAccounts | `get`, `list`, `watch` | Validate ServiceAccount exists before creating Jobs |
+| ConfigMaps | `get`, `list` | Read configuration values from target namespaces |
+
+### Cluster-Wide Write Access
+
+| Resource | Verbs | Why Needed |
+|----------|-------|------------|
+| ConfigMaps | `create`, `update` | Status tracking and caching (operator namespace only) |
+| Jobs | `create`, `delete`, `get`, `list`, `watch` | Create werf converge Jobs in target namespaces |
+| WerfBundles | `update`, `patch` | Update WerfBundle status |
+| WerfBundles/status | `update`, `patch` | Update WerfBundle status subresource |
+
+### Why Cluster-Wide Access?
+
+Cross-namespace deployments require the operator to:
+- Read registry credentials from target namespaces (where apps deploy)
+- Validate ServiceAccounts exist in target namespaces before creating Jobs
+- Resolve configuration values from ConfigMaps/Secrets in target namespaces
+- Create Jobs in target namespaces (not just the operator's namespace)
+
+**Important distinction:**
+- **Operator reads configuration** (Secrets, ConfigMaps, ServiceAccounts) cluster-wide
+- **Jobs execute deployments** (create Pods, Services, etc.) with namespace-scoped permissions
+- The operator cannot directly create application resources; it only orchestrates Job creation
+
+### Single-Tenant vs Multi-Tenant
+
+The operator's ClusterRole assumes a **single-tenant cluster** where:
+- The operator is trusted infrastructure
+- Cluster-wide read access to Secrets is acceptable
+- Namespace isolation is organizational, not a security boundary
+
+For **multi-tenant clusters** with strict namespace isolation:
+- Consider network policies to restrict cross-namespace communication
+- See [Security Model](security-model.md) for multi-tenant considerations
+
 ## Setting Up Job ServiceAccount
 
 Each **target namespace** where WerfBundles are deployed must have:

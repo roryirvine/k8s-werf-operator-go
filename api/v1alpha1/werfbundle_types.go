@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -36,7 +38,8 @@ const (
 )
 
 // WerfBundleSpec defines the desired state of WerfBundle.
-// Example:
+//
+// Example (same-namespace deployment):
 //
 //	apiVersion: werf.io/v1alpha1
 //	kind: WerfBundle
@@ -51,6 +54,22 @@ const (
 //	    pollInterval: 15m
 //	  converge:
 //	    serviceAccountName: werf-converge
+//
+// Example (cross-namespace deployment):
+//
+//	apiVersion: werf.io/v1alpha1
+//	kind: WerfBundle
+//	metadata:
+//	  name: my-app
+//	  namespace: operator-system
+//	spec:
+//	  registry:
+//	    url: ghcr.io/org/bundle
+//	    secretRef:
+//	      name: registry-creds
+//	  converge:
+//	    targetNamespace: my-app-prod
+//	    serviceAccountName: werf-deploy
 type WerfBundleSpec struct {
 	// Registry contains configuration for accessing the OCI registry where the bundle is stored.
 	// +kubebuilder:validation:Required
@@ -84,10 +103,12 @@ type RegistryConfig struct {
 // ConvergeConfig contains configuration for deploying the bundle with werf converge.
 type ConvergeConfig struct {
 	// ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
-	// This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
-	// +kubebuilder:validation:Required
+	// Required for cross-namespace deployments (when TargetNamespace differs from bundle namespace).
+	// Optional for same-namespace deployments (backward compatibility with default ServiceAccount).
+	// When specified, the ServiceAccount must exist in the target namespace.
+	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MinLength=1
-	ServiceAccountName string `json:"serviceAccountName"`
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 
 	// TargetNamespace is the namespace where werf converge will deploy resources.
 	// If not specified, defaults to the bundle's namespace.
@@ -204,6 +225,12 @@ type WerfBundleStatus struct {
 	// Provides debugging visibility without requiring external log aggregation.
 	// +kubebuilder:validation:Optional
 	LastJobLogs string `json:"lastJobLogs,omitempty"`
+
+	// ResolvedTargetNamespace is the namespace where the bundle is deployed.
+	// Defaults to bundle namespace if TargetNamespace is not set in spec.
+	// Provides visibility for debugging cross-namespace deployments.
+	// +kubebuilder:validation:Optional
+	ResolvedTargetNamespace string `json:"resolvedTargetNamespace,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -229,6 +256,30 @@ type WerfBundleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WerfBundle `json:"items"`
+}
+
+// ValidateCrossNamespaceDeployment checks if ServiceAccountName is required for cross-namespace deployment.
+// Returns an error if TargetNamespace differs from bundle namespace but ServiceAccountName is not set.
+// For same-namespace deployments (TargetNamespace empty or equals bundle namespace), ServiceAccountName is optional.
+func (wb *WerfBundle) ValidateCrossNamespaceDeployment() error {
+	targetNs := wb.Spec.Converge.TargetNamespace
+	bundleNs := wb.Namespace
+	saName := wb.Spec.Converge.ServiceAccountName
+
+	// If TargetNamespace is empty or equals bundle namespace, it's same-namespace deployment
+	if targetNs == "" || targetNs == bundleNs {
+		return nil
+	}
+
+	// Cross-namespace deployment requires ServiceAccountName
+	if saName == "" {
+		return fmt.Errorf(
+			"serviceAccountName is required for cross-namespace deployment from %s to %s",
+			bundleNs, targetNs,
+		)
+	}
+
+	return nil
 }
 
 func init() {

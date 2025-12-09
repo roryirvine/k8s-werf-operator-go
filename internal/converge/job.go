@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	"github.com/werf/k8s-werf-operator-go/internal/values"
@@ -51,6 +50,9 @@ func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 		return nil, fmt.Errorf("WerfBundle is nil")
 	}
 
+	// Calculate target namespace - this is where the Job will run
+	targetNamespace := values.GetTargetNamespace(&b.werf.Spec.Converge, b.werf.Namespace)
+
 	jobName := b.jobName(tag)
 
 	// Build base werf converge arguments
@@ -66,12 +68,11 @@ func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 			return nil, fmt.Errorf("values resolver required when valuesFrom is configured")
 		}
 
-		targetNs := values.GetTargetNamespace(&b.werf.Spec.Converge, b.werf.Namespace)
 		resolvedValues, err := b.valuesResolver.ResolveValues(
 			ctx,
 			b.werf.Spec.Converge.ValuesFrom,
 			b.werf.Namespace,
-			targetNs,
+			targetNamespace,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve values: %w", err)
@@ -97,7 +98,7 @@ func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
-			Namespace: b.werf.Namespace,
+			Namespace: targetNamespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       "werf-operator",
 				"app.kubernetes.io/instance":   b.werf.Name,
@@ -146,11 +147,30 @@ func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 		},
 	}
 
-	// Set WerfBundle as owner of this Job for automatic cleanup
-	if b.scheme != nil {
-		if err := controllerutil.SetControllerReference(b.werf, job, b.scheme); err != nil {
-			return nil, fmt.Errorf("failed to set controller reference: %w", err)
-		}
+	// Set WerfBundle as owner of this Job
+	// Use regular owner reference (not controller reference) to support cross-namespace deployments.
+	// Note: Cross-namespace owner references don't support automatic garbage collection,
+	// so manual cleanup may be needed in the WerfBundle finalizer in future phases.
+	if b.scheme == nil {
+		return nil, fmt.Errorf("scheme is required to set owner reference and prevent orphaned jobs")
+	}
+
+	gvks, _, err := b.scheme.ObjectKinds(b.werf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get GroupVersionKind for WerfBundle: %w", err)
+	}
+
+	if len(gvks) == 0 {
+		return nil, fmt.Errorf("no GroupVersionKind found for WerfBundle (scheme may not have WerfBundle registered)")
+	}
+
+	job.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: gvks[0].GroupVersion().String(),
+			Kind:       gvks[0].Kind,
+			Name:       b.werf.Name,
+			UID:        b.werf.UID,
+		},
 	}
 
 	return job, nil

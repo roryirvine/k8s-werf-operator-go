@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -616,6 +617,131 @@ func TestWerfBundleValidation(t *testing.T) {
 
 			if result.Spec.Registry.URL != tt.bundle.Spec.Registry.URL {
 				t.Errorf("URL mismatch: got %s, want %s", result.Spec.Registry.URL, tt.bundle.Spec.Registry.URL)
+			}
+		})
+	}
+}
+
+func TestCrossNamespaceValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		bundle      *WerfBundle
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "same-namespace deployment without ServiceAccountName - valid",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						// No TargetNamespace = same namespace
+						// No ServiceAccountName = should be valid for backward compat
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "same-namespace deployment with ServiceAccountName - valid",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						ServiceAccountName: "werf-converge",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "cross-namespace with ServiceAccountName - valid",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle",
+					Namespace: "operator-system",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						TargetNamespace:    "my-app-prod",
+						ServiceAccountName: "werf-deploy",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "cross-namespace without ServiceAccountName - invalid",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle",
+					Namespace: "operator-system",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						TargetNamespace: "my-app-prod",
+						// No ServiceAccountName = should fail
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "serviceAccountName is required for cross-namespace deployment",
+		},
+		{
+			name: "TargetNamespace explicitly set to bundle namespace - treated as same-namespace",
+			bundle: &WerfBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-bundle",
+					Namespace: "default",
+				},
+				Spec: WerfBundleSpec{
+					Registry: RegistryConfig{
+						URL: "ghcr.io/org/bundle",
+					},
+					Converge: ConvergeConfig{
+						TargetNamespace: "default",
+						// No ServiceAccountName = should be valid (same namespace)
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.bundle.ValidateCrossNamespaceDeployment()
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Expected error containing %q, got nil", tt.errContains)
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error containing %q, got %q", tt.errContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, got: %v", err)
+				}
 			}
 		})
 	}

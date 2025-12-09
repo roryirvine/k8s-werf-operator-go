@@ -21,6 +21,7 @@ import (
 
 	werfv1alpha1 "github.com/werf/k8s-werf-operator-go/api/v1alpha1"
 	"github.com/werf/k8s-werf-operator-go/internal/converge"
+	"github.com/werf/k8s-werf-operator-go/internal/rbac"
 	"github.com/werf/k8s-werf-operator-go/internal/registry"
 	"github.com/werf/k8s-werf-operator-go/internal/values"
 )
@@ -62,6 +63,28 @@ type WerfBundleReconciler struct {
 	RegistryClient registry.Client
 	Clientset      kubernetes.Interface
 }
+
+// Operator RBAC permissions - cluster-wide scope for cross-namespace deployments
+//
+// These kubebuilder markers generate a ClusterRole with cluster-wide permissions.
+// The operator needs cluster-wide read access to support cross-namespace deployments
+// where WerfBundles in one namespace deploy to different target namespaces.
+//
+// Secrets: Cluster-wide read access (get) for:
+//   - Registry credentials in target namespaces
+//   - Values resolution from Secrets in target namespaces
+//
+// ServiceAccounts: Cluster-wide read access (get, list, watch) for:
+//   - Pre-flight validation that target SA exists before Job creation
+//
+// ConfigMaps: Cluster-wide read/write access (create, update, get, list) for:
+//   - Values resolution from target namespaces
+//   - Status tracking and caching (operator namespace only in practice)
+//
+// Security note: Operator has cluster-wide read permissions but Jobs execute
+// with target namespace ServiceAccount permissions (namespace-scoped). The operator
+// reads configuration; Jobs execute deployments. See docs/security-model.md for
+// the complete security model and single-tenant deployment assumptions.
 
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=werf.io,resources=werfbundles/status,verbs=get;update;patch
@@ -109,11 +132,35 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// Validate ServiceAccount exists before attempting to create Job
-	if err := r.validateServiceAccount(ctx, bundle); err != nil {
-		// Status was already updated to Failed by validateServiceAccount
+	// Validate cross-namespace deployment requirements
+	if err := bundle.ValidateCrossNamespaceDeployment(); err != nil {
+		log.Error(err, "cross-namespace validation failed")
+		if updateErr := r.updateStatusFailed(ctx, bundle, err.Error()); updateErr != nil {
+			log.Error(updateErr, "failed to update status after validation failure")
+			return ctrl.Result{}, updateErr
+		}
 		// Return success (no error) but stop processing further
 		return ctrl.Result{}, nil
+	}
+
+	// Calculate and store the resolved target namespace in status for visibility
+	targetNamespace := values.GetTargetNamespace(&bundle.Spec.Converge, bundle.Namespace)
+	if bundle.Status.ResolvedTargetNamespace != targetNamespace {
+		bundle.Status.ResolvedTargetNamespace = targetNamespace
+		if err := r.Status().Update(ctx, bundle); err != nil {
+			log.Error(err, "failed to update resolved target namespace in status")
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Validate ServiceAccount exists before attempting to create Job
+	// Skip validation if ServiceAccountName is not set (same-namespace with default SA)
+	if bundle.Spec.Converge.ServiceAccountName != "" {
+		if err := r.validateServiceAccount(ctx, bundle); err != nil {
+			// Status was already updated to Failed by validateServiceAccount
+			// Return success (no error) but stop processing further
+			return ctrl.Result{}, nil
+		}
 	}
 
 	// Parse poll interval from spec, default to 15 minutes
@@ -175,7 +222,7 @@ func (r *WerfBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return r.ensureJobExists(ctx, bundle, latestTag)
 }
 
-// validateServiceAccount checks that the ServiceAccount exists in the bundle's namespace.
+// validateServiceAccount checks that the ServiceAccount exists in the target namespace.
 // Returns error if SA doesn't exist or if status update fails. If SA is not found,
 // status is updated to Failed before returning the error to prevent job creation.
 func (r *WerfBundleReconciler) validateServiceAccount(
@@ -184,25 +231,24 @@ func (r *WerfBundleReconciler) validateServiceAccount(
 ) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	saKey := types.NamespacedName{
-		Name:      bundle.Spec.Converge.ServiceAccountName,
-		Namespace: bundle.Namespace,
-	}
-	sa := &corev1.ServiceAccount{}
-	if err := r.Get(ctx, saKey, sa); err != nil {
-		if apierrors.IsNotFound(err) {
-			errMsg := fmt.Sprintf("ServiceAccount %q not found in namespace %q",
-				bundle.Spec.Converge.ServiceAccountName, bundle.Namespace)
-			log.Info("ServiceAccount not found", "serviceAccount", saKey)
-			if err := r.updateStatusFailed(ctx, bundle, errMsg); err != nil {
-				log.Error(err, "failed to update status after SA validation")
-				return err
-			}
-			// Return a sentinel error to stop processing and prevent job creation
-			return errors.New("serviceaccount not found")
+	// Calculate target namespace - this is where the Job will run
+	targetNamespace := values.GetTargetNamespace(&bundle.Spec.Converge, bundle.Namespace)
+
+	// Validate ServiceAccount exists in target namespace
+	err := rbac.ValidateServiceAccountExists(
+		ctx,
+		r.Client,
+		bundle.Spec.Converge.ServiceAccountName,
+		targetNamespace,
+	)
+	if err != nil {
+		log.Error(err, "ServiceAccount validation failed")
+		if updateErr := r.updateStatusFailed(ctx, bundle, err.Error()); updateErr != nil {
+			log.Error(updateErr, "failed to update status after SA validation")
+			return updateErr
 		}
-		log.Error(err, "failed to get ServiceAccount")
-		return err
+		// Return a sentinel error to stop processing and prevent job creation
+		return errors.New("serviceaccount validation failed")
 	}
 	return nil
 }
@@ -271,13 +317,16 @@ func (r *WerfBundleReconciler) ensureJobExists(
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 
+	// Calculate target namespace - Jobs are created in target namespace
+	targetNamespace := values.GetTargetNamespace(&bundle.Spec.Converge, bundle.Namespace)
+
 	log.Info("new tag found, ensuring converge job exists", "tag", latestTag)
 
 	// Check if we already have an active job running (deduplication)
 	if bundle.Status.ActiveJobName != "" {
 		jobKey := types.NamespacedName{
 			Name:      bundle.Status.ActiveJobName,
-			Namespace: bundle.Namespace,
+			Namespace: targetNamespace,
 		}
 		activeJob := &batchv1.Job{}
 		if err := r.Get(ctx, jobKey, activeJob); err != nil {
@@ -360,7 +409,7 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 		bundle.Status.ActiveJobName = ""
 
 		// Capture job logs for debugging
-		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, job.Namespace)
 		if err != nil {
 			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
 		} else {
@@ -386,7 +435,7 @@ func (r *WerfBundleReconciler) monitorJobCompletion(
 		bundle.Status.ActiveJobName = ""
 
 		// Capture job logs for debugging
-		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, bundle.Namespace)
+		jobLogs, err := converge.CaptureJobLogs(ctx, r.Client, r.Clientset, job.Name, job.Namespace)
 		if err != nil {
 			log.Error(err, "failed to capture job logs, continuing without logs", "jobName", job.Name)
 		} else {

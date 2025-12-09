@@ -2007,3 +2007,463 @@ func TestReconcile_NoResourceLimits_DefaultsApplied(t *testing.T) {
 	t.Logf("Default resource limits correctly applied: CPU=%s, Memory=%s",
 		cpuLimit.String(), memLimit.String())
 }
+
+func TestReconcile_CrossNamespaceWithoutSA_FailsValidation(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cross-ns-no-sa",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace: "target-ns",
+				// No ServiceAccountName - should fail validation
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-cross-ns-no-sa", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Check bundle status is Failed
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %s", updatedBundle.Status.Phase)
+	}
+
+	expectedErr := "serviceAccountName is required for cross-namespace deployment"
+	if !strings.Contains(updatedBundle.Status.LastErrorMessage, expectedErr) {
+		t.Errorf("expected validation error message, got: %s", updatedBundle.Status.LastErrorMessage)
+	}
+
+	// No job should be created
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	jobCount := 0
+	for _, job := range jobs.Items {
+		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == "test-cross-ns-no-sa" {
+			jobCount++
+		}
+	}
+
+	if jobCount > 0 {
+		t.Errorf("expected no jobs for bundle with validation error, got %d", jobCount)
+	}
+}
+
+func TestReconcile_SameNamespaceWithoutSA_CreatesJob(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-same-ns-no-sa",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				// No TargetNamespace = same namespace
+				// No ServiceAccountName = should be valid for backward compat
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-same-ns-no-sa", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Check bundle status is Syncing (job created)
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing, got %s", updatedBundle.Status.Phase)
+	}
+
+	// Job should be created
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	jobCount := 0
+	for _, job := range jobs.Items {
+		if len(job.OwnerReferences) > 0 && job.OwnerReferences[0].Name == "test-same-ns-no-sa" {
+			jobCount++
+		}
+	}
+
+	if jobCount == 0 {
+		t.Error("expected job to be created for same-namespace deployment without SA")
+	}
+}
+
+// RBAC Note: The following cross-namespace tests use a fake Kubernetes client which
+// simulates cluster-wide permissions. The operator's ClusterRole grants cluster-wide
+// read access to Secrets, ServiceAccounts, and ConfigMaps, enabling cross-namespace
+// deployments where WerfBundles in one namespace deploy to different target namespaces.
+//
+// In production, these permissions are provided by config/rbac/role.yaml (ClusterRole)
+// bound via config/rbac/role_binding.yaml (ClusterRoleBinding). The fake client doesn't
+// enforce RBAC, so these tests verify the code logic works correctly when cluster-wide
+// permissions are available.
+//
+// See docs/security-model.md for the complete security model and single-tenant
+// deployment assumptions.
+
+func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
+	ctx := context.Background()
+
+	// Create target namespace
+	targetNs := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "target-ns",
+		},
+	}
+	if err := testk8sClient.Create(ctx, targetNs); err != nil {
+		t.Fatalf("failed to create target namespace: %v", err)
+	}
+
+	// Create the ServiceAccount in the target namespace (where Job will run)
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "werf-deploy",
+			Namespace: "target-ns",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cross-ns-with-sa",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "target-ns",
+				ServiceAccountName: "werf-deploy",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-cross-ns-with-sa", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Check bundle status is Syncing (job created)
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected phase Syncing, got %s", updatedBundle.Status.Phase)
+	}
+
+	if updatedBundle.Status.LastErrorMessage != "" {
+		t.Errorf("expected no error message, got: %s", updatedBundle.Status.LastErrorMessage)
+	}
+
+	// Job should be created in target namespace
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "target-ns"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	var createdJob *batchv1.Job
+	for i := range jobs.Items {
+		if len(jobs.Items[i].OwnerReferences) > 0 &&
+			jobs.Items[i].OwnerReferences[0].Name == "test-cross-ns-with-sa" {
+			createdJob = &jobs.Items[i]
+			break
+		}
+	}
+
+	if createdJob == nil {
+		t.Error("expected job to be created for cross-namespace deployment with SA")
+	} else if createdJob.Namespace != "target-ns" {
+		t.Errorf("expected job in target-ns, got %s", createdJob.Namespace)
+	}
+}
+
+func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-same-ns-job",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				// No ServiceAccountName set - tests backward compatibility for same-namespace deployments
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-same-ns-job", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Job should be created in bundle namespace (same-namespace deployment)
+	jobs := &batchv1.JobList{}
+	opts := &client.ListOptions{Namespace: "default"}
+	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
+		t.Fatalf("failed to list jobs: %v", err)
+	}
+
+	var createdJob *batchv1.Job
+	for i := range jobs.Items {
+		if len(jobs.Items[i].OwnerReferences) > 0 &&
+			jobs.Items[i].OwnerReferences[0].Name == "test-same-ns-job" {
+			createdJob = &jobs.Items[i]
+			break
+		}
+	}
+
+	if createdJob == nil {
+		t.Error("expected job to be created for same-namespace deployment")
+	} else if createdJob.Namespace != "default" {
+		t.Errorf("expected job in default (bundle namespace), got %s", createdJob.Namespace)
+	}
+}
+
+func TestReconcile_SameNamespace_SetsResolvedTargetNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-same-ns-resolved",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				// No ServiceAccountName set - tests backward compatibility for same-namespace deployments
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-same-ns-resolved", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Fetch updated bundle and verify resolved target namespace
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	expectedNamespace := "default"
+	if updatedBundle.Status.ResolvedTargetNamespace != expectedNamespace {
+		t.Errorf(
+			"expected resolvedTargetNamespace=%s, got %s",
+			expectedNamespace,
+			updatedBundle.Status.ResolvedTargetNamespace,
+		)
+	}
+}
+
+func TestReconcile_CrossNamespace_SetsResolvedTargetNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	// Create target namespace
+	targetNs := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "resolved-target-ns",
+		},
+	}
+	if err := testk8sClient.Create(ctx, targetNs); err != nil {
+		t.Fatalf("failed to create target namespace: %v", err)
+	}
+
+	// Create ServiceAccount in target namespace
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "werf-deploy",
+			Namespace: "resolved-target-ns",
+		},
+	}
+	if err := testk8sClient.Create(ctx, sa); err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cross-ns-resolved",
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "resolved-target-ns",
+				ServiceAccountName: "werf-deploy",
+			},
+		},
+	}
+
+	if err := testk8sClient.Create(ctx, bundle); err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+
+	fakeReg := NewFakeRegistry()
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+
+	reconciler := &WerfBundleReconciler{
+		Client:         testk8sClient,
+		Scheme:         testk8sClient.Scheme(),
+		RegistryClient: fakeReg,
+		Clientset:      testK8sClientset,
+	}
+
+	req := reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-cross-ns-resolved", Namespace: "default"},
+	}
+
+	_, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	// Fetch updated bundle and verify resolved target namespace
+	updatedBundle := &werfv1alpha1.WerfBundle{}
+	if err := testk8sClient.Get(ctx, req.NamespacedName, updatedBundle); err != nil {
+		t.Fatalf("failed to get bundle: %v", err)
+	}
+
+	expectedNamespace := "resolved-target-ns"
+	if updatedBundle.Status.ResolvedTargetNamespace != expectedNamespace {
+		t.Errorf(
+			"expected resolvedTargetNamespace=%s, got %s",
+			expectedNamespace,
+			updatedBundle.Status.ResolvedTargetNamespace,
+		)
+	}
+}

@@ -50,11 +50,16 @@ spec:
           metadata:
             type: object
           spec:
-            description: "WerfBundleSpec defines the desired state of WerfBundle.\nExample:\n\n\tapiVersion:
+            description: "WerfBundleSpec defines the desired state of WerfBundle.\n\nExample
+              (same-namespace deployment):\n\n\tapiVersion: werf.io/v1alpha1\n\tkind:
+              WerfBundle\n\tmetadata:\n\t  name: my-app\n\t  namespace: default\n\tspec:\n\t
+              \ registry:\n\t    url: ghcr.io/org/bundle\n\t    secretRef:\n\t      name:
+              registry-creds\n\t    pollInterval: 15m\n\t  converge:\n\t    serviceAccountName:
+              werf-converge\n\nExample (cross-namespace deployment):\n\n\tapiVersion:
               werf.io/v1alpha1\n\tkind: WerfBundle\n\tmetadata:\n\t  name: my-app\n\t
-              \ namespace: default\n\tspec:\n\t  registry:\n\t    url: ghcr.io/org/bundle\n\t
-              \   secretRef:\n\t      name: registry-creds\n\t    pollInterval: 15m\n\t
-              \ converge:\n\t    serviceAccountName: werf-converge"
+              \ namespace: operator-system\n\tspec:\n\t  registry:\n\t    url: ghcr.io/org/bundle\n\t
+              \   secretRef:\n\t      name: registry-creds\n\t  converge:\n\t    targetNamespace:
+              my-app-prod\n\t    serviceAccountName: werf-deploy"
             properties:
               converge:
                 description: Converge contains configuration for deploying the bundle
@@ -86,7 +91,9 @@ spec:
                   serviceAccountName:
                     description: |-
                       ServiceAccountName is the name of the ServiceAccount to use for running werf converge Jobs.
-                      This ServiceAccount must exist in the bundle's namespace with permissions to create/update resources.
+                      Required for cross-namespace deployments (when TargetNamespace differs from bundle namespace).
+                      Optional for same-namespace deployments (backward compatibility with default ServiceAccount).
+                      When specified, the ServiceAccount must exist in the target namespace.
                     minLength: 1
                     type: string
                   targetNamespace:
@@ -154,8 +161,6 @@ spec:
                         rule: (has(self.configMapRef) && !has(self.secretRef)) ||
                           (!has(self.configMapRef) && has(self.secretRef))
                     type: array
-                required:
-                - serviceAccountName
                 type: object
               registry:
                 description: Registry contains configuration for accessing the OCI
@@ -258,6 +263,12 @@ spec:
                 - Syncing
                 - Synced
                 - Failed
+                type: string
+              resolvedTargetNamespace:
+                description: |-
+                  ResolvedTargetNamespace is the namespace where the bundle is deployed.
+                  Defaults to bundle namespace if TargetNamespace is not set in spec.
+                  Provides visibility for debugging cross-namespace deployments.
                 type: string
             type: object
         type: object

@@ -152,12 +152,12 @@ func (b *Builder) Build(ctx context.Context, tag string) (*batchv1.Job, error) {
 	// Note: Cross-namespace owner references don't support automatic garbage collection,
 	// so manual cleanup may be needed in the WerfBundle finalizer in future phases.
 	if b.scheme != nil {
-		gvk, err := b.scheme.ObjectKinds(b.werf)
-		if err == nil && len(gvk) > 0 {
+		gvks, _, err := b.scheme.ObjectKinds(b.werf)
+		if err == nil && len(gvks) > 0 {
 			job.OwnerReferences = []metav1.OwnerReference{
 				{
-					APIVersion: gvk[0].GroupVersion().String(),
-					Kind:       gvk[0].Kind,
+					APIVersion: gvks[0].GroupVersion().String(),
+					Kind:       gvks[0].Kind,
 					Name:       b.werf.Name,
 					UID:        b.werf.UID,
 				},

@@ -1,0 +1,20 @@
+# Multi-file ConfigMap fixture for complex scenarios
+# This ConfigMap has multiple data keys, each representing a separate "file"
+# Tests behavior when ConfigMap contains multiple value sources
+# Each key (config1.yaml, config2.yaml) is a separate YAML document
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: multi-file-values
+  namespace: default
+data:
+  config1.yaml: |
+    app:
+      name: service-one
+      version: "1.0.0"
+  config2.yaml: |
+    infrastructure:
+      replicas: 3
+      resources:
+        memory: 512Mi
+        cpu: 250m

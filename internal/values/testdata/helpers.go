@@ -49,7 +49,11 @@ func LoadSecretFixture(filename string) (*corev1.Secret, error) {
 
 // WithNamespace sets the namespace on a Kubernetes object and returns it.
 // This is a convenience helper for tests that need to assign fixtures to specific namespaces.
-// Usage: cm := testdata.LoadConfigMapFixture("simple").WithNamespace("test-ns")
+// It simplifies test setup by allowing assignment and namespace setting in one step.
+// Usage: cm := testdata.LoadConfigMapFixture("simple-values.yaml")
+//        cm.Namespace = "test-ns"
+// Or: cm, _ := testdata.LoadConfigMapFixture("simple-values.yaml")
+//     WithNamespace(cm, "test-ns")
 func WithNamespace(obj interface{}, namespace string) interface{} {
 	switch v := obj.(type) {
 	case *corev1.ConfigMap:
@@ -62,6 +66,26 @@ func WithNamespace(obj interface{}, namespace string) interface{} {
 		}
 	}
 	return obj
+}
+
+// ConfigMapWithNamespace is a convenience helper that returns a ConfigMap with namespace set.
+// This is more idiomatic Go than the generic WithNamespace function.
+// Usage: cm := testdata.ConfigMapWithNamespace(testdata.LoadConfigMapFixture("simple-values.yaml"), "test-ns")
+func ConfigMapWithNamespace(cm *corev1.ConfigMap, namespace string) *corev1.ConfigMap {
+	if cm != nil {
+		cm.Namespace = namespace
+	}
+	return cm
+}
+
+// SecretWithNamespace is a convenience helper that returns a Secret with namespace set.
+// This is more idiomatic Go than the generic WithNamespace function.
+// Usage: s := testdata.SecretWithNamespace(testdata.LoadSecretFixture("database-credentials.yaml"), "test-ns")
+func SecretWithNamespace(s *corev1.Secret, namespace string) *corev1.Secret {
+	if s != nil {
+		s.Namespace = namespace
+	}
+	return s
 }
 
 // fixtureDir returns the path to the testdata directory.

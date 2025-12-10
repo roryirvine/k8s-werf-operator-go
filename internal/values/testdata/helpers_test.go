@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestLoadConfigMapFixture(t *testing.T) {
@@ -195,6 +196,70 @@ func TestWithNamespace(t *testing.T) {
 				if v != nil && v.Namespace != tt.namespace {
 					t.Errorf("expected namespace %q, got %q", tt.namespace, v.Namespace)
 				}
+			}
+		})
+	}
+}
+
+func TestConfigMapWithNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		cm        *corev1.ConfigMap
+		namespace string
+	}{
+		{
+			name: "set namespace on ConfigMap",
+			cm: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Data:       map[string]string{"key": "value"},
+			},
+			namespace: "new-ns",
+		},
+		{
+			name:      "handle nil ConfigMap",
+			cm:        nil,
+			namespace: "new-ns",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ConfigMapWithNamespace(tt.cm, tt.namespace)
+
+			if result != nil && result.Namespace != tt.namespace {
+				t.Errorf("expected namespace %q, got %q", tt.namespace, result.Namespace)
+			}
+		})
+	}
+}
+
+func TestSecretWithNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		secret    *corev1.Secret
+		namespace string
+	}{
+		{
+			name: "set namespace on Secret",
+			secret: &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Data:       map[string][]byte{"key": []byte("value")},
+			},
+			namespace: "new-ns",
+		},
+		{
+			name:      "handle nil Secret",
+			secret:    nil,
+			namespace: "new-ns",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := SecretWithNamespace(tt.secret, tt.namespace)
+
+			if result != nil && result.Namespace != tt.namespace {
+				t.Errorf("expected namespace %q, got %q", tt.namespace, result.Namespace)
 			}
 		})
 	}

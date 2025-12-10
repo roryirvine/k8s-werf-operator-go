@@ -1,0 +1,23 @@
+# Nested ConfigMap fixture for complex YAML testing
+# This ConfigMap contains nested YAML structure that tests the flattening logic
+# Keys will flatten to dot notation: database.host, database.port, etc.
+# Used to verify complex YAML parsing with nested maps
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nested-values
+  namespace: default
+data:
+  values.yaml: |
+    database:
+      host: postgres.example.com
+      port: 5432
+      username: app_user
+      ssl:
+        enabled: true
+        verify: full
+    cache:
+      redis:
+        host: redis.example.com
+        port: 6379
+        ttl: 3600

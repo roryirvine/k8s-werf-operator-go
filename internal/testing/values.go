@@ -42,7 +42,29 @@ import (
 // The values map is converted to YAML and stored in the "values.yaml" key.
 // This is useful for creating test configuration data without writing raw YAML strings.
 //
-// Example:
+// The helper handles:
+// - Converting Go map to YAML format
+// - Creating ConfigMap with correct metadata
+// - Persisting to Kubernetes API (via client.Create)
+// - Returning created ConfigMap for cleanup and assertions
+//
+// Use this instead of manually constructing ConfigMaps with inline YAML:
+//   BEFORE (15+ lines):
+//     cm := &corev1.ConfigMap{
+//         ObjectMeta: metav1.ObjectMeta{...},
+//         Data: map[string]string{
+//             "values.yaml": "app:\n  name: myapp\n  replicas: \"3\"\n",
+//         },
+//     }
+//     k8sClient.Create(ctx, cm)
+//
+//   AFTER (2 lines):
+//     cm, err := CreateTestConfigMapWithValues(ctx, k8sClient, "default", "my-config", map[string]string{
+//         "app.name": "myapp",
+//         "app.replicas": "3",
+//     })
+//
+// The returned ConfigMap can be used for cleanup:
 //
 //	cm, err := CreateTestConfigMapWithValues(ctx, k8sClient, "default", "my-config", map[string]string{
 //	    "app.name": "myapp",
@@ -80,7 +102,30 @@ func CreateTestConfigMapWithValues(ctx context.Context, c client.Client, namespa
 // Kubernetes automatically handles base64 encoding of the Secret.Data field.
 // This is useful for creating test secret data without writing raw YAML strings.
 //
-// Example:
+// The helper handles:
+// - Converting Go map to YAML format
+// - Creating Secret with correct metadata
+// - Converting YAML string to bytes (Kubernetes handles base64 transparently)
+// - Persisting to Kubernetes API (via client.Create)
+// - Returning created Secret for cleanup and assertions
+//
+// Use this instead of manually constructing Secrets with inline YAML and encoding:
+//   BEFORE (15+ lines with encoding complexity):
+//     secret := &corev1.Secret{
+//         ObjectMeta: metav1.ObjectMeta{...},
+//         Data: map[string][]byte{
+//             "values.yaml": []byte("db:\n  username: user\n  password: secret-pass\n"),
+//         },
+//     }
+//     k8sClient.Create(ctx, secret)
+//
+//   AFTER (2 lines):
+//     secret, err := CreateTestSecretWithValues(ctx, k8sClient, "default", "my-secret", map[string]string{
+//         "db.username": "user",
+//         "db.password": "secret-pass",
+//     })
+//
+// The returned Secret can be used for cleanup:
 //
 //	secret, err := CreateTestSecretWithValues(ctx, k8sClient, "default", "my-secret", map[string]string{
 //	    "db.username": "user",
@@ -117,11 +162,50 @@ func CreateTestSecretWithValues(ctx context.Context, c client.Client, namespace,
 // Returns a map of flag key-value pairs parsed from the Job's args.
 // This is useful for verifying that values were correctly converted to werf CLI flags.
 //
-// Example:
+// The helper handles:
+// - Safely accessing Job container args
+// - Parsing --set key=value flag pairs
+// - Handling values with special characters (URLs, paths, passwords)
+// - Skipping malformed flags gracefully
+// - Returning convenient map[string]string for assertions
+//
+// Use this instead of manually parsing Job args:
+//   BEFORE (10+ lines of parsing):
+//     args := job.Spec.Template.Spec.Containers[0].Args
+//     flags := make(map[string]string)
+//     for i := 0; i < len(args); i++ {
+//         if args[i] == "--set" && i+1 < len(args) {
+//             parts := strings.Split(args[i+1], "=")
+//             if len(parts) == 2 {
+//                 flags[parts[0]] = parts[1]
+//             }
+//         }
+//     }
+//     if flags["app.name"] != "myapp" { t.Error(...) }
+//
+//   AFTER (2 lines):
+//     flags := ExtractSetFlags(job)
+//     if flags["app.name"] != "myapp" { t.Error(...) }
+//
+// Example with single assertion:
 //
 //	flags := ExtractSetFlags(job)
 //	if flags["app.name"] != "myapp" {
 //	    t.Errorf("expected app.name=myapp, got %v", flags["app.name"])
+//	}
+//
+// Example with multiple assertions:
+//
+//	flags := ExtractSetFlags(job)
+//	expectedFlags := map[string]string{
+//	    "app.name": "myapp",
+//	    "app.replicas": "3",
+//	    "database.host": "postgres.db",
+//	}
+//	for key, expectedValue := range expectedFlags {
+//	    if flags[key] != expectedValue {
+//	        t.Errorf("for key %s: expected %s, got %s", key, expectedValue, flags[key])
+//	    }
 //	}
 func ExtractSetFlags(job *batchv1.Job) map[string]string {
 	result := make(map[string]string)

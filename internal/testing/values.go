@@ -52,7 +52,26 @@ import (
 //	}
 //	defer k8sClient.Delete(ctx, cm)
 func CreateTestConfigMapWithValues(ctx context.Context, c client.Client, namespace, name string, values map[string]string) (*corev1.ConfigMap, error) {
-	return nil, nil
+	yamlData, err := convertMapToYAML(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert values to YAML: %w", err)
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: map[string]string{
+			"values.yaml": yamlData,
+		},
+	}
+
+	if err := c.Create(ctx, cm); err != nil {
+		return nil, fmt.Errorf("failed to create ConfigMap: %w", err)
+	}
+
+	return cm, nil
 }
 
 // CreateTestSecretWithValues creates a Secret with values for testing.
@@ -91,5 +110,9 @@ func ExtractSetFlags(job *batchv1.Job) map[string]string {
 // convertMapToYAML converts a map[string]string to YAML format.
 // Used internally by ConfigMap and Secret helpers.
 func convertMapToYAML(values map[string]string) (string, error) {
-	return "", nil
+	data, err := yaml.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal values to YAML: %w", err)
+	}
+	return string(data), nil
 }

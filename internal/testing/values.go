@@ -29,6 +29,7 @@ package testing
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -123,7 +124,26 @@ func CreateTestSecretWithValues(ctx context.Context, c client.Client, namespace,
 //	    t.Errorf("expected app.name=myapp, got %v", flags["app.name"])
 //	}
 func ExtractSetFlags(job *batchv1.Job) map[string]string {
-	return nil
+	result := make(map[string]string)
+
+	if job == nil || len(job.Spec.Template.Spec.Containers) == 0 {
+		return result
+	}
+
+	args := job.Spec.Template.Spec.Containers[0].Args
+
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--set" && i+1 < len(args) {
+			// Parse key=value from next arg
+			parts := strings.SplitN(args[i+1], "=", 2)
+			if len(parts) == 2 {
+				result[parts[0]] = parts[1]
+			}
+			i++ // Skip the value arg
+		}
+	}
+
+	return result
 }
 
 // convertMapToYAML converts a map[string]string to YAML format.

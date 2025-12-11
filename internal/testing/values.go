@@ -90,7 +90,26 @@ func CreateTestConfigMapWithValues(ctx context.Context, c client.Client, namespa
 //	}
 //	defer k8sClient.Delete(ctx, secret)
 func CreateTestSecretWithValues(ctx context.Context, c client.Client, namespace, name string, values map[string]string) (*corev1.Secret, error) {
-	return nil, nil
+	yamlData, err := convertMapToYAML(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert values to YAML: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"values.yaml": []byte(yamlData),
+		},
+	}
+
+	if err := c.Create(ctx, secret); err != nil {
+		return nil, fmt.Errorf("failed to create Secret: %w", err)
+	}
+
+	return secret, nil
 }
 
 // ExtractSetFlags extracts --set flags from a Job's container arguments.

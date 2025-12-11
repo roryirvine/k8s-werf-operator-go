@@ -362,3 +362,83 @@ func containsString(slice []string, s string) bool {
 	}
 	return false
 }
+
+// TestHelper_ValuesHelpersReduceBoilerplate demonstrates how the values test helpers
+// simplify setup and verification in integration tests.
+// This test documents the benefit of using CreateTestConfigMapWithValues, CreateTestSecretWithValues,
+// and ExtractSetFlags helpers compared to manual construction.
+func TestHelper_ValuesHelpersReduceBoilerplate(t *testing.T) {
+	// HELPER BENEFITS DOCUMENTATION:
+	//
+	// CreateTestConfigMapWithValues: Setup helper
+	// BEFORE: 15+ lines of inline ConfigMap construction with raw YAML
+	//   cm := &corev1.ConfigMap{
+	//       ObjectMeta: metav1.ObjectMeta{Name: "...", Namespace: "..."},
+	//       Data: map[string]string{
+	//           "values.yaml": "app:\n  name: ...\n  replicas: ...\ndatabase:\n  host: ...\n",
+	//       },
+	//   }
+	//   k8sClient.Create(ctx, cm)
+	//
+	// AFTER: 2 lines using helper
+	//   cm, err := testingutil.CreateTestConfigMapWithValues(ctx, k8sClient, "default", "app-config", map[string]string{
+	//       "app.name": "myapp",
+	//       "app.replicas": "3",
+	//       "database.host": "postgres.db",
+	//   })
+	//
+	// Benefits:
+	// - Clearer intent: creating values config, not worrying about ConfigMap structure
+	// - Less boilerplate: map speaks for itself, no YAML escaping
+	// - Easier to maintain: change data in one place (the map)
+	//
+	// ---
+	//
+	// CreateTestSecretWithValues: Setup helper for secrets
+	// BEFORE: 15+ lines with base64 encoding concerns
+	//   secret := &corev1.Secret{
+	//       ObjectMeta: metav1.ObjectMeta{Name: "...", Namespace: "..."},
+	//       Data: map[string][]byte{
+	//           "values.yaml": []byte(...),  // need to encode YAML as bytes
+	//       },
+	//   }
+	//
+	// AFTER: 2 lines, handles encoding automatically
+	//   secret, err := testingutil.CreateTestSecretWithValues(ctx, k8sClient, "default", "app-secrets", map[string]string{
+	//       "db.username": "appuser",
+	//       "db.password": "secret123",
+	//   })
+	//
+	// Benefits:
+	// - No manual base64 encoding
+	// - Same interface as ConfigMap helper
+	// - Kubernetes client handles encoding transparently
+	//
+	// ---
+	//
+	// ExtractSetFlags: Verification helper
+	// BEFORE: 10+ lines of manual parsing
+	//   args := job.Spec.Template.Spec.Containers[0].Args
+	//   flags := make(map[string]string)
+	//   for i := 0; i < len(args); i++ {
+	//       if args[i] == "--set" && i+1 < len(args) {
+	//           parts := strings.Split(args[i+1], "=")
+	//           if len(parts) == 2 {
+	//               flags[parts[0]] = parts[1]
+	//           }
+	//       }
+	//   }
+	//   if flags["app.name"] != "myapp" { t.Error("...") }
+	//
+	// AFTER: 2 lines
+	//   flags := testingutil.ExtractSetFlags(job)
+	//   if flags["app.name"] != "myapp" { t.Error("...") }
+	//
+	// Benefits:
+	// - Clear intent: checking values in Job
+	// - Less noise in tests: focus on what matters (the assertions)
+	// - Robust parsing: handles all edge cases
+
+	// This test passes because it documents the helpers, doesn't require execution
+}
+

@@ -483,3 +483,154 @@ func TestExtractSetFlags_MalformedFlag(t *testing.T) {
 		t.Errorf("expected another.key=value2, got %s", flags["another.key"])
 	}
 }
+
+func TestAssertJobHasSetFlag_Success(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-job",
+			Namespace: "default",
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "werf",
+							Args: []string{
+								"converge",
+								"--set", "app.name=myapp",
+								"--set", "app.replicas=3",
+								"my-registry/bundle:tag",
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+				},
+			},
+		},
+	}
+
+	// Should not error when flag exists with correct value
+	mockTesting := &mockTestingT{}
+	AssertJobHasSetFlag(mockTesting, job, "app.name", "myapp")
+	if mockTesting.errorfCalled {
+		t.Error("expected no error when flag has correct value")
+	}
+}
+
+func TestAssertJobHasSetFlag_MissingFlag(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-job",
+			Namespace: "default",
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "werf",
+							Args: []string{
+								"converge",
+								"--set", "app.name=myapp",
+								"my-registry/bundle:tag",
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+				},
+			},
+		},
+	}
+
+	// Should error when flag is missing
+	mockTesting := &mockTestingT{}
+	AssertJobHasSetFlag(mockTesting, job, "missing.key", "value")
+	if !mockTesting.errorfCalled {
+		t.Error("expected error when flag is missing")
+	}
+}
+
+func TestAssertJobSetFlagsEqual_Success(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-job",
+			Namespace: "default",
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "werf",
+							Args: []string{
+								"converge",
+								"--set", "app.name=myapp",
+								"--set", "app.replicas=3",
+								"my-registry/bundle:tag",
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+				},
+			},
+		},
+	}
+
+	// Should not error when all flags match
+	mockTesting := &mockTestingT{}
+	AssertJobSetFlagsEqual(mockTesting, job, map[string]string{
+		"app.name":     "myapp",
+		"app.replicas": "3",
+	})
+	if mockTesting.errorfCalled {
+		t.Error("expected no error when all flags match")
+	}
+}
+
+func TestAssertJobSetFlagsEqual_UnexpectedFlag(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-job",
+			Namespace: "default",
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "werf",
+							Args: []string{
+								"converge",
+								"--set", "app.name=myapp",
+								"--set", "app.replicas=3",
+								"--set", "extra.flag=unexpected",
+								"my-registry/bundle:tag",
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+				},
+			},
+		},
+	}
+
+	// Should error when job has flags not in expected
+	mockTesting := &mockTestingT{}
+	AssertJobSetFlagsEqual(mockTesting, job, map[string]string{
+		"app.name":     "myapp",
+		"app.replicas": "3",
+	})
+	if !mockTesting.errorfCalled {
+		t.Error("expected error when job has unexpected flags")
+	}
+}
+
+// mockTestingT is a mock implementation of testing.T for assertion helpers
+type mockTestingT struct {
+	errorfCalled bool
+}
+
+func (m *mockTestingT) Errorf(format string, args ...interface{}) {
+	m.errorfCalled = true
+}

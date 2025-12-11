@@ -230,6 +230,81 @@ func ExtractSetFlags(job *batchv1.Job) map[string]string {
 	return result
 }
 
+// AssertJobHasSetFlag checks that a Job contains a specific --set flag with expected value.
+// This is a convenience helper for common assertion patterns in tests.
+// Use when you want to assert a single flag value clearly.
+//
+// Example:
+//
+//	testingutil.AssertJobHasSetFlag(t, job, "app.name", "myapp")
+//	testingutil.AssertJobHasSetFlag(t, job, "app.replicas", "3")
+//
+// Alternative (without helper):
+//
+//	flags := testingutil.ExtractSetFlags(job)
+//	if flags["app.name"] != "myapp" {
+//	    t.Errorf("expected app.name=myapp, got %s", flags["app.name"])
+//	}
+func AssertJobHasSetFlag(t interface {
+	Errorf(string, ...interface{})
+}, job *batchv1.Job, key, expectedValue string) {
+	flags := ExtractSetFlags(job)
+	actualValue, ok := flags[key]
+	if !ok {
+		t.Errorf("expected --set flag for key %s not found in job args", key)
+		return
+	}
+	if actualValue != expectedValue {
+		t.Errorf("for --set flag %s: expected %s, got %s", key, expectedValue, actualValue)
+	}
+}
+
+// AssertJobSetFlagsEqual checks that all extracted --set flags match expected values.
+// This is a convenience helper for asserting multiple flags at once.
+// Use when you want to verify a complete set of values in Job args.
+//
+// Example:
+//
+//	testingutil.AssertJobSetFlagsEqual(t, job, map[string]string{
+//	    "app.name": "myapp",
+//	    "app.replicas": "3",
+//	    "database.host": "postgres.db",
+//	})
+//
+// Alternative (without helper):
+//
+//	flags := testingutil.ExtractSetFlags(job)
+//	expectedFlags := map[string]string{...}
+//	for key, expectedValue := range expectedFlags {
+//	    if flags[key] != expectedValue {
+//	        t.Errorf("for key %s: expected %s, got %s", key, expectedValue, flags[key])
+//	    }
+//	}
+func AssertJobSetFlagsEqual(t interface {
+	Errorf(string, ...interface{})
+}, job *batchv1.Job, expectedFlags map[string]string) {
+	flags := ExtractSetFlags(job)
+
+	// Check all expected flags are present with correct values
+	for key, expectedValue := range expectedFlags {
+		actualValue, ok := flags[key]
+		if !ok {
+			t.Errorf("expected --set flag for key %s not found in job args", key)
+			continue
+		}
+		if actualValue != expectedValue {
+			t.Errorf("for --set flag %s: expected %s, got %s", key, expectedValue, actualValue)
+		}
+	}
+
+	// Check for unexpected flags (flags in job but not in expected)
+	for key := range flags {
+		if _, ok := expectedFlags[key]; !ok {
+			t.Errorf("unexpected --set flag %s=%s in job args (not in expectedFlags)", key, flags[key])
+		}
+	}
+}
+
 // convertMapToYAML converts a map[string]string to YAML format.
 // Used internally by ConfigMap and Secret helpers.
 func convertMapToYAML(values map[string]string) (string, error) {

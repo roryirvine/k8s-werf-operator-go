@@ -358,10 +358,10 @@ func TestExtractSetFlags_MultipleFlags(t *testing.T) {
 	}
 
 	expectedFlags := map[string]string{
-		"app.name":       "myapp",
-		"database.host":  "db.example.com",
-		"database.port":  "5432",
-		"cache.enabled":  "true",
+		"app.name":      "myapp",
+		"database.host": "db.example.com",
+		"database.port": "5432",
+		"cache.enabled": "true",
 	}
 
 	for key, expectedValue := range expectedFlags {

@@ -47,13 +47,13 @@ func TestCreateTestNamespace_UniqueName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create first namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns1)
+	defer func() { _ = testk8sClient.Delete(ctx, ns1) }()
 
 	ns2, err := testingutil.CreateTestNamespace(ctx, testk8sClient, "test-ns-helper-2")
 	if err != nil {
 		t.Fatalf("failed to create second namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns2)
+	defer func() { _ = testk8sClient.Delete(ctx, ns2) }()
 
 	if ns1.Name == ns2.Name {
 		t.Errorf("expected different namespace names, got both '%s'", ns1.Name)
@@ -68,7 +68,7 @@ func TestCreateTestServiceAccount_CreatesServiceAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
 
 	// Create ServiceAccount
 	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "test-sa-ns", "test-sa")
@@ -108,26 +108,26 @@ func TestCreateTestServiceAccount_CorrectNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns1)
+	defer func() { _ = testk8sClient.Delete(ctx, ns1) }()
 
 	ns2, err := testingutil.CreateTestNamespace(ctx, testk8sClient, "test-sa-ns-helper-2")
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns2)
+	defer func() { _ = testk8sClient.Delete(ctx, ns2) }()
 
 	// Create SAs in different namespaces
 	sa1, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "test-sa-ns-helper-1", "deployer")
 	if err != nil {
 		t.Fatalf("failed to create ServiceAccount in ns1: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, sa1)
+	defer func() { _ = testk8sClient.Delete(ctx, sa1) }()
 
 	sa2, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "test-sa-ns-helper-2", "deployer")
 	if err != nil {
 		t.Fatalf("failed to create ServiceAccount in ns2: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, sa2)
+	defer func() { _ = testk8sClient.Delete(ctx, sa2) }()
 
 	// Verify they're in correct namespaces
 	if sa1.Namespace != "test-sa-ns-helper-1" {
@@ -146,7 +146,7 @@ func TestCreateTestRole_CreatesRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
 
 	// Define permissions
 	rules := []rbacv1.PolicyRule{
@@ -176,8 +176,9 @@ func TestCreateTestRole_CreatesRole(t *testing.T) {
 	}
 
 	// Verify Role exists in API server
+	roleKey := client.ObjectKey{Name: "deployer", Namespace: "test-role-ns"}
 	retrieved := &rbacv1.Role{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: "deployer", Namespace: "test-role-ns"}, retrieved); err != nil {
+	if err := testk8sClient.Get(ctx, roleKey, retrieved); err != nil {
 		t.Errorf("failed to retrieve created Role: %v", err)
 	}
 
@@ -195,7 +196,7 @@ func TestCreateTestRole_IncludesRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
 
 	// Define multiple permissions
 	rules := []rbacv1.PolicyRule{
@@ -216,7 +217,7 @@ func TestCreateTestRole_IncludesRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create Role: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, role)
+	defer func() { _ = testk8sClient.Delete(ctx, role) }()
 
 	if len(role.Rules) != 2 {
 		t.Errorf("expected 2 rules, got %d", len(role.Rules))
@@ -241,14 +242,14 @@ func TestCreateTestRoleBinding_CreatesRoleBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
 
 	// Create ServiceAccount
 	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "test-rb-ns", "deployer")
 	if err != nil {
 		t.Fatalf("failed to create ServiceAccount: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, sa)
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Create Role
 	rules := []rbacv1.PolicyRule{
@@ -262,7 +263,7 @@ func TestCreateTestRoleBinding_CreatesRoleBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create Role: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, role)
+	defer func() { _ = testk8sClient.Delete(ctx, role) }()
 
 	// Create RoleBinding
 	rb, err := testingutil.CreateTestRoleBinding(ctx, testk8sClient, "test-rb-ns", "deployer", "deployer")
@@ -294,14 +295,14 @@ func TestCreateTestRoleBinding_CorrectSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
 
 	// Create ServiceAccount
 	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "test-subject-ns", "my-sa")
 	if err != nil {
 		t.Fatalf("failed to create ServiceAccount: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, sa)
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Create Role
 	rules := []rbacv1.PolicyRule{
@@ -315,14 +316,14 @@ func TestCreateTestRoleBinding_CorrectSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create Role: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, role)
+	defer func() { _ = testk8sClient.Delete(ctx, role) }()
 
 	// Create RoleBinding
 	rb, err := testingutil.CreateTestRoleBinding(ctx, testk8sClient, "test-subject-ns", "my-role", "my-sa")
 	if err != nil {
 		t.Fatalf("failed to create RoleBinding: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, rb)
+	defer func() { _ = testk8sClient.Delete(ctx, rb) }()
 
 	// Verify subject
 	if len(rb.Subjects) != 1 {
@@ -349,14 +350,14 @@ func TestCreateTestRoleBinding_CorrectRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
 
 	// Create ServiceAccount
 	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "test-roleref-ns", "deployer")
 	if err != nil {
 		t.Fatalf("failed to create ServiceAccount: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, sa)
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Create Role
 	rules := []rbacv1.PolicyRule{
@@ -370,14 +371,14 @@ func TestCreateTestRoleBinding_CorrectRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create Role: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, role)
+	defer func() { _ = testk8sClient.Delete(ctx, role) }()
 
 	// Create RoleBinding
 	rb, err := testingutil.CreateTestRoleBinding(ctx, testk8sClient, "test-roleref-ns", "my-role", "deployer")
 	if err != nil {
 		t.Fatalf("failed to create RoleBinding: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, rb)
+	defer func() { _ = testk8sClient.Delete(ctx, rb) }()
 
 	// Verify RoleRef
 	if rb.RoleRef.Kind != "Role" {
@@ -406,8 +407,8 @@ func TestCreateNamespaceWithRBAC_CreatesAllResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace with RBAC: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
-	defer testk8sClient.Delete(ctx, sa)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	if ns == nil {
 		t.Fatal("expected namespace, got nil")
@@ -423,26 +424,29 @@ func TestCreateNamespaceWithRBAC_CreatesAllResources(t *testing.T) {
 	}
 
 	// Verify ServiceAccount was created
+	saKey := client.ObjectKey{Name: "deployer", Namespace: "test-rbac-ns"}
 	retrievedSa := &corev1.ServiceAccount{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: "deployer", Namespace: "test-rbac-ns"}, retrievedSa); err != nil {
+	if err := testk8sClient.Get(ctx, saKey, retrievedSa); err != nil {
 		t.Errorf("ServiceAccount not found: %v", err)
 	}
 
 	// Verify Role was created
+	roleKey := client.ObjectKey{Name: "deployer-role", Namespace: "test-rbac-ns"}
 	role := &rbacv1.Role{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: "deployer-role", Namespace: "test-rbac-ns"}, role); err != nil {
+	if err := testk8sClient.Get(ctx, roleKey, role); err != nil {
 		t.Errorf("Role not found: %v", err)
 	}
 
 	// Verify RoleBinding was created
+	rbName := sa.Name + "-" + role.Name
 	rb := &rbacv1.RoleBinding{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: sa.Name + "-" + role.Name, Namespace: "test-rbac-ns"}, rb); err != nil {
+	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: rbName, Namespace: "test-rbac-ns"}, rb); err != nil {
 		t.Errorf("RoleBinding not found: %v", err)
 	}
 
 	// Cleanup
-	testk8sClient.Delete(ctx, role)
-	testk8sClient.Delete(ctx, rb)
+	_ = testk8sClient.Delete(ctx, role)
+	_ = testk8sClient.Delete(ctx, rb)
 }
 
 func TestCreateNamespaceWithRBAC_ResourcesLinked(t *testing.T) {
@@ -460,17 +464,19 @@ func TestCreateNamespaceWithRBAC_ResourcesLinked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create namespace with RBAC: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
-	defer testk8sClient.Delete(ctx, sa)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Verify the resources are properly linked
 	role := &rbacv1.Role{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: "job-runner-role", Namespace: "test-linked-ns"}, role); err != nil {
+	roleName := "job-runner-role"
+	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: roleName, Namespace: "test-linked-ns"}, role); err != nil {
 		t.Fatalf("failed to get role: %v", err)
 	}
 
+	rbName := sa.Name + "-" + role.Name
 	rb := &rbacv1.RoleBinding{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: sa.Name + "-" + role.Name, Namespace: "test-linked-ns"}, rb); err != nil {
+	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: rbName, Namespace: "test-linked-ns"}, rb); err != nil {
 		t.Fatalf("failed to get rolebinding: %v", err)
 	}
 
@@ -485,8 +491,8 @@ func TestCreateNamespaceWithRBAC_ResourcesLinked(t *testing.T) {
 	}
 
 	// Cleanup
-	testk8sClient.Delete(ctx, role)
-	testk8sClient.Delete(ctx, rb)
+	_ = testk8sClient.Delete(ctx, role)
+	_ = testk8sClient.Delete(ctx, rb)
 }
 
 func TestCreateNamespaceWithDeployPermissions_IncludesPermissions(t *testing.T) {
@@ -496,12 +502,13 @@ func TestCreateNamespaceWithDeployPermissions_IncludesPermissions(t *testing.T) 
 	if err != nil {
 		t.Fatalf("failed to create namespace with deploy permissions: %v", err)
 	}
-	defer testk8sClient.Delete(ctx, ns)
-	defer testk8sClient.Delete(ctx, sa)
+	defer func() { _ = testk8sClient.Delete(ctx, ns) }()
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Verify Role includes deployment permissions
+	deployRoleKey := client.ObjectKey{Name: "werf-deployer-role", Namespace: "test-deploy-ns"}
 	role := &rbacv1.Role{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: "werf-deployer-role", Namespace: "test-deploy-ns"}, role); err != nil {
+	if err := testk8sClient.Get(ctx, deployRoleKey, role); err != nil {
 		t.Fatalf("failed to get role: %v", err)
 	}
 
@@ -519,9 +526,10 @@ func TestCreateNamespaceWithDeployPermissions_IncludesPermissions(t *testing.T) 
 	}
 
 	// Cleanup
-	testk8sClient.Delete(ctx, role)
+	_ = testk8sClient.Delete(ctx, role)
+	deployRbName := sa.Name + "-" + role.Name
 	rb := &rbacv1.RoleBinding{}
-	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: sa.Name + "-" + role.Name, Namespace: "test-deploy-ns"}, rb); err == nil {
-		testk8sClient.Delete(ctx, rb)
+	if err := testk8sClient.Get(ctx, client.ObjectKey{Name: deployRbName, Namespace: "test-deploy-ns"}, rb); err == nil {
+		_ = testk8sClient.Delete(ctx, rb)
 	}
 }

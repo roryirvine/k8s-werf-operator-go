@@ -98,7 +98,11 @@ func getWerfBundle(t *testing.T, ctx context.Context, name, namespace string) *w
 // bundleName is the WerfBundle name,
 // bundleNamespace is the namespace where the WerfBundle exists,
 // jobNamespace is the namespace where the Job is created (may be different from bundle namespace).
-func getJobInNamespaceForBundle(t *testing.T, ctx context.Context, bundleName, bundleNamespace, jobNamespace string) *batchv1.Job {
+func getJobInNamespaceForBundle(
+	t *testing.T,
+	ctx context.Context,
+	bundleName, bundleNamespace, jobNamespace string,
+) *batchv1.Job {
 	t.Helper()
 
 	// First, fetch the WerfBundle to get the active job name from status
@@ -360,7 +364,8 @@ func TestIntegration_ValuesFromMultipleSources_LaterSourceWins(t *testing.T) {
 		"app.environment": "prod",
 		"app.replicas":    "5",
 	}
-	overrideCM, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "default", "override-config", overrideValues)
+	overrideCM, err := testingutil.CreateTestConfigMapWithValues(
+		ctx, testk8sClient, "default", "override-config", overrideValues)
 	if err != nil {
 		t.Fatalf("failed to create override ConfigMap: %v", err)
 	}
@@ -466,7 +471,9 @@ func TestIntegration_ValuesFromMissingRequiredConfigMap_StatusFailed(t *testing.
 
 	// Reconcile
 	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
-	// Error is expected because required ConfigMap is missing
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
 
 	// Verify NO Job was created
 	if jobExists(t, ctx, bundleName, "default") {
@@ -573,7 +580,8 @@ func TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace(t *testing.T)
 	targetNamespace := fmt.Sprintf("app-prod-%d", testCounter)
 
 	// Create target namespace with RBAC using helper
-	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, targetNamespace, "werf-deployer")
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(
+		ctx, testk8sClient, targetNamespace, "werf-deployer")
 	if err != nil {
 		t.Fatalf("failed to create target namespace with RBAC: %v", err)
 	}
@@ -669,7 +677,9 @@ func TestIntegration_CrossNamespaceMissingServiceAccount_ValidationFails(t *test
 
 	// Reconcile
 	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
-	// Error is expected because ServiceAccount doesn't exist
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
 
 	// Verify NO Job was created
 	if jobExists(t, ctx, bundleName, "app-no-sa") {
@@ -759,7 +769,8 @@ func TestIntegration_MultipleBundlesSameTarget_BothJobsCreated(t *testing.T) {
 	bundle2Name := testBundleNameForStep("multi-app2")
 
 	// Create target namespace with RBAC
-	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "shared-target", "werf-deployer")
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(
+		ctx, testk8sClient, "shared-target", "werf-deployer")
 	if err != nil {
 		t.Fatalf("failed to create target namespace with RBAC: %v", err)
 	}
@@ -857,7 +868,8 @@ func TestIntegration_ValuesInTargetNamespace_CrossNamespaceResolution(t *testing
 	bundleName := testBundleNameForStep("values-target-ns")
 
 	// Create target namespace with RBAC
-	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "target-with-values", "werf-deployer")
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(
+		ctx, testk8sClient, "target-with-values", "werf-deployer")
 	if err != nil {
 		t.Fatalf("failed to create target namespace with RBAC: %v", err)
 	}
@@ -869,7 +881,8 @@ func TestIntegration_ValuesInTargetNamespace_CrossNamespaceResolution(t *testing
 		"app.env":  "production",
 		"app.tier": "backend",
 	}
-	cm, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "target-with-values", "prod-config", configMapValues)
+	cm, err := testingutil.CreateTestConfigMapWithValues(
+		ctx, testk8sClient, "target-with-values", "prod-config", configMapValues)
 	if err != nil {
 		t.Fatalf("failed to create ConfigMap in target ns: %v", err)
 	}
@@ -966,7 +979,8 @@ func TestIntegration_CrossNamespaceWithValues_FullFlow(t *testing.T) {
 	defer func() { _ = testk8sClient.Delete(ctx, cm) }()
 
 	// Step 2: Create target namespace with Secret and RBAC
-	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "deploy-prod", "werf-deployer")
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(
+		ctx, testk8sClient, "deploy-prod", "werf-deployer")
 	if err != nil {
 		t.Fatalf("failed to create target namespace with RBAC: %v", err)
 	}

@@ -175,3 +175,97 @@ func TestIntegration_ValuesFromSingleConfigMap_JobHasSetFlags(t *testing.T) {
 		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
 	}
 }
+
+// TestIntegration_ValuesFromConfigMapAndSecret_BothMerged verifies that a WerfBundle
+// with multiple sources (ConfigMap and Secret) merges them correctly in Job --set flags.
+//
+// This integration test verifies:
+// - ConfigMap and Secret are both fetched
+// - Values from both sources are merged in array order
+// - Job contains --set flags for all keys from both sources
+// - WerfBundle status is updated to Syncing
+//
+// Test scenario:
+// 1. Create ConfigMap with app.name and app.replicas
+// 2. Create Secret with db.password and db.host
+// 3. Create WerfBundle with ValuesFrom referencing both (ConfigMap first, then Secret)
+// 4. Reconcile
+// 5. Verify Job has all 4 --set flags (2 from ConfigMap, 2 from Secret)
+// 6. Verify WerfBundle status is Syncing
+func TestIntegration_ValuesFromConfigMapAndSecret_BothMerged(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("configmap-and-secret")
+
+	// Step 1: Create ConfigMap with app configuration
+	configMapValues := map[string]string{
+		"app.name":     "myapp",
+		"app.replicas": "3",
+	}
+	cm, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "default", "app-config", configMapValues)
+	if err != nil {
+		t.Fatalf("failed to create ConfigMap: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, cm) }()
+
+	// Step 2: Create Secret with database credentials
+	secretValues := map[string]string{
+		"db.password": "secret123",
+		"db.host":     "db.example.com",
+	}
+	secret, err := testingutil.CreateTestSecretWithValues(ctx, testk8sClient, "default", "db-secrets", secretValues)
+	if err != nil {
+		t.Fatalf("failed to create Secret: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, secret) }()
+
+	// Step 3: Create WerfBundle with both ConfigMap and Secret sources
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				ValuesFrom: []werfv1alpha1.ValuesSource{
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "app-config"},
+					},
+					{
+						SecretRef: &corev1.LocalObjectReference{Name: "db-secrets"},
+					},
+				},
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Step 4: Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Step 5: Verify Job has all values from both sources merged
+	job := getJobInNamespace(t, ctx, bundleName, "default")
+	expectedValues := map[string]string{
+		"app.name":     "myapp",
+		"app.replicas": "3",
+		"db.password":  "secret123",
+		"db.host":      "db.example.com",
+	}
+	testingutil.AssertJobSetFlagsEqual(t, job, expectedValues)
+
+	// Step 6: Verify WerfBundle status is Syncing
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}

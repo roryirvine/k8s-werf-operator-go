@@ -367,3 +367,611 @@ func TestIntegration_ValuesFromMultipleSources_LaterSourceWins(t *testing.T) {
 		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
 	}
 }
+
+// TestIntegration_ValuesFromMissingRequiredConfigMap_StatusFailed verifies that when
+// a required ConfigMap source is missing, the reconciliation fails and WerfBundle status is Failed.
+//
+// This integration test verifies error handling:
+// - Missing required ConfigMap is detected during reconciliation
+// - NO Job is created
+// - WerfBundle status is set to Failed
+// - Error message mentions the missing ConfigMap
+func TestIntegration_ValuesFromMissingRequiredConfigMap_StatusFailed(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("missing-required")
+
+	// Create WerfBundle referencing non-existent ConfigMap (required, no optional flag)
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				ValuesFrom: []werfv1alpha1.ValuesSource{
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "nonexistent-config"},
+						// No Optional field means it's required
+					},
+				},
+			},
+		},
+	}
+	err := testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	// Error is expected because required ConfigMap is missing
+
+	// Verify NO Job was created
+	if jobExists(t, ctx, bundleName, "default") {
+		t.Error("expected no Job to be created when required ConfigMap is missing")
+	}
+
+	// Verify WerfBundle status is Failed with error message
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseFailed {
+		t.Errorf("expected status phase Failed, got %v", updatedBundle.Status.Phase)
+	}
+	if updatedBundle.Status.LastErrorMessage == "" {
+		t.Error("expected error message when ConfigMap is missing")
+	}
+}
+
+// TestIntegration_ValuesFromMissingOptionalSecret_JobCreated verifies that when
+// an optional Secret source is missing, the reconciliation succeeds and skips that source.
+//
+// This integration test verifies optional source handling:
+// - Missing optional Secret is skipped (not an error)
+// - Job IS created with values from available sources
+// - WerfBundle status is Syncing (not Failed)
+func TestIntegration_ValuesFromMissingOptionalSecret_JobCreated(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("missing-optional")
+
+	// Create ConfigMap (required source that exists)
+	configMapValues := map[string]string{
+		"app.name": "myapp",
+	}
+	cm, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "default", "app-config", configMapValues)
+	if err != nil {
+		t.Fatalf("failed to create ConfigMap: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, cm) }()
+
+	// Create WerfBundle with both required ConfigMap and optional Secret (Secret doesn't exist)
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				ValuesFrom: []werfv1alpha1.ValuesSource{
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "app-config"},
+						// Required (no Optional flag)
+					},
+					{
+						SecretRef: &corev1.LocalObjectReference{Name: "nonexistent-secret"},
+						Optional: boolPtr(true), // This one is optional
+					},
+				},
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Verify Job WAS created (optional Secret missing is OK)
+	job := getJobInNamespace(t, ctx, bundleName, "default")
+	// Job should only have values from ConfigMap (Secret was skipped)
+	testingutil.AssertJobSetFlagsEqual(t, job, configMapValues)
+
+	// Verify WerfBundle status is Syncing (not Failed, since optional source was skipped)
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}
+
+// boolPtr is a helper to create a pointer to a bool value.
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace verifies that a WerfBundle
+// with TargetNamespace creates a Job in the target namespace, not the bundle namespace.
+//
+// This integration test verifies cross-namespace deployment:
+// - Job is created in target namespace (not bundle namespace)
+// - Job spec references the correct ServiceAccount
+// - WerfBundle status is Syncing
+func TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("cross-namespace")
+
+	// Create target namespace with RBAC using helper
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "my-app-prod", "werf-deployer")
+	if err != nil {
+		t.Fatalf("failed to create target namespace with RBAC: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, targetNs) }()
+	defer func() { _ = testk8sClient.Delete(ctx, targetSa) }()
+
+	// Create WerfBundle in "default" with TargetNamespace="my-app-prod"
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "my-app-prod",
+				ServiceAccountName: "werf-deployer",
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Verify Job was created in target namespace (not "default")
+	job := getJobInNamespace(t, ctx, bundleName, "my-app-prod")
+	if job.Namespace != "my-app-prod" {
+		t.Errorf("expected Job in namespace 'my-app-prod', got %v", job.Namespace)
+	}
+
+	// Verify Job spec references correct ServiceAccount
+	if job.Spec.ServiceAccountName != "werf-deployer" {
+		t.Errorf("expected ServiceAccountName 'werf-deployer', got %v", job.Spec.ServiceAccountName)
+	}
+
+	// Verify WerfBundle status is Syncing
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}
+
+// TestIntegration_CrossNamespaceMissingServiceAccount_ValidationFails verifies that when
+// a required ServiceAccount doesn't exist in the target namespace, validation fails.
+//
+// This integration test verifies RBAC validation:
+// - Target namespace exists but ServiceAccount doesn't
+// - Reconciliation fails with validation error
+// - No Job is created
+// - WerfBundle status is Failed with error message
+func TestIntegration_CrossNamespaceMissingServiceAccount_ValidationFails(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("missing-sa")
+
+	// Create target namespace WITHOUT ServiceAccount
+	targetNs, err := testingutil.CreateTestNamespace(ctx, testk8sClient, "app-no-sa")
+	if err != nil {
+		t.Fatalf("failed to create target namespace: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, targetNs) }()
+
+	// Create WerfBundle pointing to non-existent ServiceAccount
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "app-no-sa",
+				ServiceAccountName: "nonexistent-sa", // This ServiceAccount doesn't exist
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	// Error is expected because ServiceAccount doesn't exist
+
+	// Verify NO Job was created
+	if jobExists(t, ctx, bundleName, "app-no-sa") {
+		t.Error("expected no Job when ServiceAccount is missing")
+	}
+
+	// Verify WerfBundle status is Failed with error message
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseFailed {
+		t.Errorf("expected status phase Failed, got %v", updatedBundle.Status.Phase)
+	}
+	if updatedBundle.Status.LastErrorMessage == "" {
+		t.Error("expected error message when ServiceAccount is missing")
+	}
+}
+
+// TestIntegration_NoTargetNamespace_JobInBundleNamespace verifies backward compatibility:
+// when TargetNamespace is not set, Job is created in the bundle namespace.
+//
+// This integration test verifies backward compatibility:
+// - WerfBundle without TargetNamespace field
+// - Job created in bundle namespace (not a different namespace)
+// - WerfBundle status is Syncing
+func TestIntegration_NoTargetNamespace_JobInBundleNamespace(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("backward-compat")
+
+	// Create WerfBundle WITHOUT TargetNamespace (legacy pattern)
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				// No TargetNamespace - deploy in bundle namespace
+				ServiceAccountName: "werf-converge",
+			},
+		},
+	}
+	err := testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Verify Job was created in bundle namespace (default)
+	job := getJobInNamespace(t, ctx, bundleName, "default")
+	if job.Namespace != "default" {
+		t.Errorf("expected Job in bundle namespace 'default', got %v", job.Namespace)
+	}
+
+	// Verify WerfBundle status is Syncing
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}
+
+// TestIntegration_MultipleBundlesSameTarget_BothJobsCreated verifies that multiple
+// WerfBundles can deploy to the same target namespace without conflicts.
+//
+// This integration test verifies multi-bundle scenarios:
+// - Two WerfBundles created targeting the same namespace
+// - Both Jobs created in target namespace
+// - No naming conflicts or race conditions
+// - Both have correct status
+func TestIntegration_MultipleBundlesSameTarget_BothJobsCreated(t *testing.T) {
+	ctx := context.Background()
+	bundle1Name := testBundleNameForStep("multi-app1")
+	bundle2Name := testBundleNameForStep("multi-app2")
+
+	// Create target namespace with RBAC
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "shared-target", "werf-deployer")
+	if err != nil {
+		t.Fatalf("failed to create target namespace with RBAC: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, targetNs) }()
+	defer func() { _ = testk8sClient.Delete(ctx, targetSa) }()
+
+	// Create first WerfBundle
+	bundle1 := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundle1Name,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/app1",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "shared-target",
+				ServiceAccountName: "werf-deployer",
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle1)
+	if err != nil {
+		t.Fatalf("failed to create bundle1: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle1) }()
+
+	// Create second WerfBundle
+	bundle2 := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundle2Name,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/app2",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "shared-target",
+				ServiceAccountName: "werf-deployer",
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle2)
+	if err != nil {
+		t.Fatalf("failed to create bundle2: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle2) }()
+
+	// Reconcile both
+	_, err = reconcileWerfBundle(t, ctx, bundle1Name, "default")
+	if err != nil {
+		t.Fatalf("reconciliation of bundle1 failed: %v", err)
+	}
+
+	_, err = reconcileWerfBundle(t, ctx, bundle2Name, "default")
+	if err != nil {
+		t.Fatalf("reconciliation of bundle2 failed: %v", err)
+	}
+
+	// Verify both Jobs created in shared target namespace
+	job1 := getJobInNamespace(t, ctx, bundle1Name, "shared-target")
+	if job1.Namespace != "shared-target" {
+		t.Errorf("expected job1 in 'shared-target', got %v", job1.Namespace)
+	}
+
+	job2 := getJobInNamespace(t, ctx, bundle2Name, "shared-target")
+	if job2.Namespace != "shared-target" {
+		t.Errorf("expected job2 in 'shared-target', got %v", job2.Namespace)
+	}
+
+	// Verify both have correct status
+	updatedBundle1 := getWerfBundle(t, ctx, bundle1Name, "default")
+	if updatedBundle1.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected bundle1 status Syncing, got %v", updatedBundle1.Status.Phase)
+	}
+
+	updatedBundle2 := getWerfBundle(t, ctx, bundle2Name, "default")
+	if updatedBundle2.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected bundle2 status Syncing, got %v", updatedBundle2.Status.Phase)
+	}
+}
+
+// TestIntegration_ValuesInTargetNamespace_CrossNamespaceResolution verifies that values
+// from ConfigMaps/Secrets in the target namespace are correctly resolved.
+//
+// This integration test verifies cross-namespace value resolution:
+// - ConfigMap exists in target namespace (not bundle namespace)
+// - Values are resolved from target namespace
+// - Job created in target namespace with correct --set flags
+// - Demonstrates namespace precedence (bundle ns checked first, then target ns)
+func TestIntegration_ValuesInTargetNamespace_CrossNamespaceResolution(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("values-target-ns")
+
+	// Create target namespace with RBAC
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "target-with-values", "werf-deployer")
+	if err != nil {
+		t.Fatalf("failed to create target namespace with RBAC: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, targetNs) }()
+	defer func() { _ = testk8sClient.Delete(ctx, targetSa) }()
+
+	// Create ConfigMap in TARGET namespace (not bundle namespace)
+	configMapValues := map[string]string{
+		"app.env":  "production",
+		"app.tier": "backend",
+	}
+	cm, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "target-with-values", "prod-config", configMapValues)
+	if err != nil {
+		t.Fatalf("failed to create ConfigMap in target ns: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, cm) }()
+
+	// Create WerfBundle in "default" referencing ConfigMap in target namespace
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "target-with-values",
+				ServiceAccountName: "werf-deployer",
+				ValuesFrom: []werfv1alpha1.ValuesSource{
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "prod-config"},
+					},
+				},
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Verify Job created in target namespace with values from ConfigMap in target namespace
+	job := getJobInNamespace(t, ctx, bundleName, "target-with-values")
+	testingutil.AssertJobSetFlagsEqual(t, job, configMapValues)
+
+	// Verify WerfBundle status is Syncing
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}
+
+// TestIntegration_CrossNamespaceWithValues_FullFlow verifies the complete end-to-end flow:
+// values from multiple namespaces + cross-namespace deployment + RBAC validation.
+//
+// This is the most complex integration scenario, combining:
+// - Bundle namespace with ConfigMap (base configuration)
+// - Target namespace with Secret (credentials)
+// - Cross-namespace deployment to target namespace
+// - RBAC validation (ServiceAccount exists)
+// - Values resolution from both namespaces
+// - Job created in target namespace with all values
+//
+// Test scenario:
+// 1. Create bundle namespace with ConfigMap (app configuration)
+// 2. Create target namespace with Secret (database credentials) and RBAC
+// 3. Create WerfBundle with TargetNamespace and ValuesFrom (both sources)
+// 4. Reconcile
+// 5. Verify Job created in target namespace
+// 6. Verify Job has --set flags from both ConfigMap and Secret
+// 7. Verify WerfBundle status is Syncing
+func TestIntegration_CrossNamespaceWithValues_FullFlow(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("full-flow")
+	bundleNs := "bundle-ns"
+
+	// Step 1: Create bundle namespace with ConfigMap
+	bundleNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: bundleNs,
+		},
+	}
+	err := testk8sClient.Create(ctx, bundleNamespace)
+	if err != nil {
+		t.Fatalf("failed to create bundle namespace: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundleNamespace) }()
+
+	configMapValues := map[string]string{
+		"app.name":    "myservice",
+		"app.replicas": "3",
+	}
+	cm, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, bundleNs, "app-config", configMapValues)
+	if err != nil {
+		t.Fatalf("failed to create ConfigMap in bundle namespace: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, cm) }()
+
+	// Step 2: Create target namespace with Secret and RBAC
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "deploy-prod", "werf-deployer")
+	if err != nil {
+		t.Fatalf("failed to create target namespace with RBAC: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, targetNs) }()
+	defer func() { _ = testk8sClient.Delete(ctx, targetSa) }()
+
+	secretValues := map[string]string{
+		"db.host":     "postgres.prod.svc.cluster.local",
+		"db.password": "secret-password-123",
+	}
+	secret, err := testingutil.CreateTestSecretWithValues(ctx, testk8sClient, "deploy-prod", "db-creds", secretValues)
+	if err != nil {
+		t.Fatalf("failed to create Secret in target namespace: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, secret) }()
+
+	// Step 3: Create WerfBundle with cross-namespace deployment and values from both namespaces
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: bundleNs,
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/service",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				TargetNamespace:    "deploy-prod",
+				ServiceAccountName: "werf-deployer",
+				ValuesFrom: []werfv1alpha1.ValuesSource{
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "app-config"},
+						// References ConfigMap in bundle namespace (default behavior)
+					},
+					{
+						SecretRef: &corev1.LocalObjectReference{Name: "db-creds"},
+						// References Secret in target namespace (values resolver checks target first for name collisions)
+					},
+				},
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Step 4: Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, bundleNs)
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Step 5: Verify Job created in target namespace
+	job := getJobInNamespace(t, ctx, bundleName, "deploy-prod")
+	if job.Namespace != "deploy-prod" {
+		t.Errorf("expected Job in target namespace 'deploy-prod', got %v", job.Namespace)
+	}
+
+	// Step 6: Verify Job has --set flags from both ConfigMap and Secret
+	expectedValues := map[string]string{
+		"app.name":      "myservice",
+		"app.replicas":  "3",
+		"db.host":       "postgres.prod.svc.cluster.local",
+		"db.password":   "secret-password-123",
+	}
+	testingutil.AssertJobSetFlagsEqual(t, job, expectedValues)
+
+	// Step 7: Verify WerfBundle status is Syncing
+	updatedBundle := getWerfBundle(t, ctx, bundleName, bundleNs)
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}

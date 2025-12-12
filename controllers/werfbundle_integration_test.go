@@ -355,9 +355,9 @@ func TestIntegration_ValuesFromMultipleSources_LaterSourceWins(t *testing.T) {
 	// Step 5: Verify Job has correct precedence: later source wins for overlapping keys
 	job := getJobInNamespace(t, ctx, bundleName, "default")
 	expectedValues := map[string]string{
-		"app.environment": "prod",     // From override (later source)
-		"app.debug":       "false",    // From base (no override)
-		"app.replicas":    "5",        // From override
+		"app.environment": "prod",  // From override (later source)
+		"app.debug":       "false", // From base (no override)
+		"app.replicas":    "5",     // From override
 	}
 	testingutil.AssertJobSetFlagsEqual(t, job, expectedValues)
 
@@ -466,7 +466,7 @@ func TestIntegration_ValuesFromMissingOptionalSecret_JobCreated(t *testing.T) {
 					},
 					{
 						SecretRef: &corev1.LocalObjectReference{Name: "nonexistent-secret"},
-						Optional: boolPtr(true), // This one is optional
+						Optional:  boolPtr(true), // This one is optional
 					},
 				},
 			},
@@ -554,9 +554,9 @@ func TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace(t *testing.T)
 		t.Errorf("expected Job in namespace 'my-app-prod', got %v", job.Namespace)
 	}
 
-	// Verify Job spec references correct ServiceAccount
-	if job.Spec.ServiceAccountName != "werf-deployer" {
-		t.Errorf("expected ServiceAccountName 'werf-deployer', got %v", job.Spec.ServiceAccountName)
+	// Verify Job PodSpec references correct ServiceAccount
+	if job.Spec.Template.Spec.ServiceAccountName != "werf-deployer" {
+		t.Errorf("expected ServiceAccountName 'werf-deployer', got %v", job.Spec.Template.Spec.ServiceAccountName)
 	}
 
 	// Verify WerfBundle status is Syncing
@@ -889,7 +889,7 @@ func TestIntegration_CrossNamespaceWithValues_FullFlow(t *testing.T) {
 	defer func() { _ = testk8sClient.Delete(ctx, bundleNamespace) }()
 
 	configMapValues := map[string]string{
-		"app.name":    "myservice",
+		"app.name":     "myservice",
 		"app.replicas": "3",
 	}
 	cm, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, bundleNs, "app-config", configMapValues)
@@ -962,10 +962,10 @@ func TestIntegration_CrossNamespaceWithValues_FullFlow(t *testing.T) {
 
 	// Step 6: Verify Job has --set flags from both ConfigMap and Secret
 	expectedValues := map[string]string{
-		"app.name":      "myservice",
-		"app.replicas":  "3",
-		"db.host":       "postgres.prod.svc.cluster.local",
-		"db.password":   "secret-password-123",
+		"app.name":     "myservice",
+		"app.replicas": "3",
+		"db.host":      "postgres.prod.svc.cluster.local",
+		"db.password":  "secret-password-123",
 	}
 	testingutil.AssertJobSetFlagsEqual(t, job, expectedValues)
 

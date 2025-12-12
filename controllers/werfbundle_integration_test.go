@@ -269,3 +269,101 @@ func TestIntegration_ValuesFromConfigMapAndSecret_BothMerged(t *testing.T) {
 		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
 	}
 }
+
+// TestIntegration_ValuesFromMultipleSources_LaterSourceWins verifies that when multiple
+// sources have overlapping keys, the later source's value wins (last-wins precedence).
+//
+// This integration test verifies:
+// - Multiple ConfigMaps can provide values for the same keys
+// - When keys overlap, later source wins
+// - Job contains --set flags with values from the later source
+// - WerfBundle status is updated to Syncing
+//
+// Test scenario:
+// 1. Create "base-config" ConfigMap with app.environment=dev
+// 2. Create "override-config" ConfigMap with app.environment=prod (same key, different value)
+// 3. Create WerfBundle with both in ValuesFrom (base first, override second)
+// 4. Reconcile
+// 5. Verify Job has --set app.environment=prod (from override, not base)
+// 6. Verify WerfBundle status is Syncing
+//
+// This demonstrates the merge precedence rule: sources are merged in array order,
+// with later values overriding earlier ones for the same key.
+func TestIntegration_ValuesFromMultipleSources_LaterSourceWins(t *testing.T) {
+	ctx := context.Background()
+	bundleName := testBundleNameForStep("precedence-override")
+
+	// Step 1: Create "base" ConfigMap with initial values
+	baseValues := map[string]string{
+		"app.environment": "dev",
+		"app.debug":       "false",
+	}
+	baseCM, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "default", "base-config", baseValues)
+	if err != nil {
+		t.Fatalf("failed to create base ConfigMap: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, baseCM) }()
+
+	// Step 2: Create "override" ConfigMap with overlapping key (same app.environment)
+	// This represents environment-specific overrides (e.g., prod overrides dev)
+	overrideValues := map[string]string{
+		"app.environment": "prod",
+		"app.replicas":    "5",
+	}
+	overrideCM, err := testingutil.CreateTestConfigMapWithValues(ctx, testk8sClient, "default", "override-config", overrideValues)
+	if err != nil {
+		t.Fatalf("failed to create override ConfigMap: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, overrideCM) }()
+
+	// Step 3: Create WerfBundle with both ConfigMaps (base first, override second)
+	// This means override-config values take precedence over base-config values
+	bundle := &werfv1alpha1.WerfBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bundleName,
+			Namespace: "default",
+		},
+		Spec: werfv1alpha1.WerfBundleSpec{
+			Registry: werfv1alpha1.RegistryConfig{
+				URL: "ghcr.io/test/bundle",
+			},
+			Converge: werfv1alpha1.ConvergeConfig{
+				ServiceAccountName: "werf-converge",
+				ValuesFrom: []werfv1alpha1.ValuesSource{
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "base-config"},
+					},
+					{
+						ConfigMapRef: &corev1.LocalObjectReference{Name: "override-config"},
+					},
+				},
+			},
+		},
+	}
+	err = testk8sClient.Create(ctx, bundle)
+	if err != nil {
+		t.Fatalf("failed to create WerfBundle: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, bundle) }()
+
+	// Step 4: Reconcile
+	_, err = reconcileWerfBundle(t, ctx, bundleName, "default")
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+
+	// Step 5: Verify Job has correct precedence: later source wins for overlapping keys
+	job := getJobInNamespace(t, ctx, bundleName, "default")
+	expectedValues := map[string]string{
+		"app.environment": "prod",     // From override (later source)
+		"app.debug":       "false",    // From base (no override)
+		"app.replicas":    "5",        // From override
+	}
+	testingutil.AssertJobSetFlagsEqual(t, job, expectedValues)
+
+	// Step 6: Verify WerfBundle status is Syncing
+	updatedBundle := getWerfBundle(t, ctx, bundleName, "default")
+	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
+		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
+	}
+}

@@ -28,7 +28,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -41,10 +40,13 @@ import (
 	testingutil "github.com/werf/k8s-werf-operator-go/internal/testing"
 )
 
-// testBundleNameForStep generates a unique bundle name using timestamp.
-// This ensures each test gets a unique name, avoiding conflicts.
+// testBundleNameForStep generates a unique bundle name using a monotonic counter.
+// This ensures each test gets a unique name within Kubernetes label length limits (63 chars).
+var testCounter int64
+
 func testBundleNameForStep(stepName string) string {
-	return fmt.Sprintf("test-bundle-%s-%d", stepName, time.Now().UnixNano())
+	testCounter++
+	return fmt.Sprintf("test-%s-%d", stepName, testCounter)
 }
 
 // reconcileWerfBundle is a helper to execute reconciliation for a WerfBundle.
@@ -54,6 +56,12 @@ func reconcileWerfBundle(t *testing.T, ctx context.Context, bundleName, bundleNs
 
 	// Create reconciler with dependencies
 	fakeReg := NewFakeRegistry()
+	// Set default tags for test repositories to enable reconciliation
+	fakeReg.SetTags("ghcr.io/test/bundle", []string{"v1.0.0"})
+	fakeReg.SetTags("ghcr.io/test/app1", []string{"v1.0.0"})
+	fakeReg.SetTags("ghcr.io/test/app2", []string{"v1.0.0"})
+	fakeReg.SetTags("ghcr.io/test/service", []string{"v1.0.0"})
+
 	reconciler := &WerfBundleReconciler{
 		Client:         testk8sClient,
 		Scheme:         testk8sClient.Scheme(),
@@ -84,15 +92,36 @@ func getWerfBundle(t *testing.T, ctx context.Context, name, namespace string) *w
 	return bundle
 }
 
-// getJobInNamespace fetches a Job by name from a specific namespace.
-func getJobInNamespace(t *testing.T, ctx context.Context, name, namespace string) *batchv1.Job {
+// getJobInNamespaceForBundle fetches a Job associated with a WerfBundle by looking up the
+// active job name from the bundle's status. The job name is generated deterministically
+// but includes a hash and UUID suffix, so we can't predict it in the test.
+// bundleName is the WerfBundle name,
+// bundleNamespace is the namespace where the WerfBundle exists,
+// jobNamespace is the namespace where the Job is created (may be different from bundle namespace).
+func getJobInNamespaceForBundle(t *testing.T, ctx context.Context, bundleName, bundleNamespace, jobNamespace string) *batchv1.Job {
 	t.Helper()
+
+	// First, fetch the WerfBundle to get the active job name from status
+	bundle := getWerfBundle(t, ctx, bundleName, bundleNamespace)
+	if bundle.Status.ActiveJobName == "" {
+		t.Fatalf("WerfBundle has no active job name in status")
+	}
+
+	// Now fetch the actual job using the name from status (in the job namespace, which may differ)
 	job := &batchv1.Job{}
-	err := testk8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, job)
+	err := testk8sClient.Get(ctx, types.NamespacedName{Name: bundle.Status.ActiveJobName, Namespace: jobNamespace}, job)
 	if err != nil {
-		t.Fatalf("failed to get Job: %v", err)
+		t.Fatalf("failed to get Job %q in namespace %q: %v", bundle.Status.ActiveJobName, jobNamespace, err)
 	}
 	return job
+}
+
+// getJobInNamespace fetches a Job associated with a WerfBundle by looking up the
+// active job name from the bundle's status. Assumes the WerfBundle is in "default" namespace.
+// The job name is generated deterministically but includes a hash and UUID suffix, so we can't predict it in the test.
+func getJobInNamespace(t *testing.T, ctx context.Context, bundleName, jobNamespace string) *batchv1.Job {
+	t.Helper()
+	return getJobInNamespaceForBundle(t, ctx, bundleName, "default", jobNamespace)
 }
 
 // jobExists checks if a Job exists in a given namespace.
@@ -121,6 +150,13 @@ func jobExists(t *testing.T, ctx context.Context, name, namespace string) bool {
 func TestIntegration_ValuesFromSingleConfigMap_JobHasSetFlags(t *testing.T) {
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("single-configmap")
+
+	// Step 0: Create ServiceAccount required for Job execution
+	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "default", "werf-converge")
+	if err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Step 1: Create ConfigMap with test values using helper
 	configMapValues := map[string]string{
@@ -195,6 +231,13 @@ func TestIntegration_ValuesFromSingleConfigMap_JobHasSetFlags(t *testing.T) {
 func TestIntegration_ValuesFromConfigMapAndSecret_BothMerged(t *testing.T) {
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("configmap-and-secret")
+
+	// Step 0: Create ServiceAccount required for Job execution
+	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "default", "werf-converge")
+	if err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Step 1: Create ConfigMap with app configuration
 	configMapValues := map[string]string{
@@ -293,6 +336,13 @@ func TestIntegration_ValuesFromMultipleSources_LaterSourceWins(t *testing.T) {
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("precedence-override")
 
+	// Step 0: Create ServiceAccount required for Job execution
+	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "default", "werf-converge")
+	if err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
+
 	// Step 1: Create "base" ConfigMap with initial values
 	baseValues := map[string]string{
 		"app.environment": "dev",
@@ -380,6 +430,13 @@ func TestIntegration_ValuesFromMissingRequiredConfigMap_StatusFailed(t *testing.
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("missing-required")
 
+	// Step 0: Create ServiceAccount required for Job execution
+	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "default", "werf-converge")
+	if err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
+
 	// Create WerfBundle referencing non-existent ConfigMap (required, no optional flag)
 	bundle := &werfv1alpha1.WerfBundle{
 		ObjectMeta: metav1.ObjectMeta{
@@ -401,7 +458,7 @@ func TestIntegration_ValuesFromMissingRequiredConfigMap_StatusFailed(t *testing.
 			},
 		},
 	}
-	err := testk8sClient.Create(ctx, bundle)
+	err = testk8sClient.Create(ctx, bundle)
 	if err != nil {
 		t.Fatalf("failed to create WerfBundle: %v", err)
 	}
@@ -436,6 +493,13 @@ func TestIntegration_ValuesFromMissingRequiredConfigMap_StatusFailed(t *testing.
 func TestIntegration_ValuesFromMissingOptionalSecret_JobCreated(t *testing.T) {
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("missing-optional")
+
+	// Step 0: Create ServiceAccount required for Job execution
+	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "default", "werf-converge")
+	if err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
 
 	// Create ConfigMap (required source that exists)
 	configMapValues := map[string]string{
@@ -506,16 +570,17 @@ func TestIntegration_ValuesFromMissingOptionalSecret_JobCreated(t *testing.T) {
 func TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace(t *testing.T) {
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("cross-namespace")
+	targetNamespace := fmt.Sprintf("app-prod-%d", testCounter)
 
 	// Create target namespace with RBAC using helper
-	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, "my-app-prod", "werf-deployer")
+	targetNs, targetSa, err := testingutil.CreateNamespaceWithDeployPermissions(ctx, testk8sClient, targetNamespace, "werf-deployer")
 	if err != nil {
 		t.Fatalf("failed to create target namespace with RBAC: %v", err)
 	}
 	defer func() { _ = testk8sClient.Delete(ctx, targetNs) }()
 	defer func() { _ = testk8sClient.Delete(ctx, targetSa) }()
 
-	// Create WerfBundle in "default" with TargetNamespace="my-app-prod"
+	// Create WerfBundle in "default" with TargetNamespace=targetNamespace
 	bundle := &werfv1alpha1.WerfBundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      bundleName,
@@ -526,7 +591,7 @@ func TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace(t *testing.T)
 				URL: "ghcr.io/test/bundle",
 			},
 			Converge: werfv1alpha1.ConvergeConfig{
-				TargetNamespace:    "my-app-prod",
+				TargetNamespace:    targetNamespace,
 				ServiceAccountName: "werf-deployer",
 			},
 		},
@@ -544,9 +609,9 @@ func TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace(t *testing.T)
 	}
 
 	// Verify Job was created in target namespace (not "default")
-	job := getJobInNamespace(t, ctx, bundleName, "my-app-prod")
-	if job.Namespace != "my-app-prod" {
-		t.Errorf("expected Job in namespace 'my-app-prod', got %v", job.Namespace)
+	job := getJobInNamespace(t, ctx, bundleName, targetNamespace)
+	if job.Namespace != targetNamespace {
+		t.Errorf("expected Job in namespace %q, got %v", targetNamespace, job.Namespace)
 	}
 
 	// Verify Job PodSpec references correct ServiceAccount
@@ -632,6 +697,13 @@ func TestIntegration_NoTargetNamespace_JobInBundleNamespace(t *testing.T) {
 	ctx := context.Background()
 	bundleName := testBundleNameForStep("backward-compat")
 
+	// Step 0: Create ServiceAccount required for Job execution
+	sa, err := testingutil.CreateTestServiceAccount(ctx, testk8sClient, "default", "werf-converge")
+	if err != nil {
+		t.Fatalf("failed to create ServiceAccount: %v", err)
+	}
+	defer func() { _ = testk8sClient.Delete(ctx, sa) }()
+
 	// Create WerfBundle WITHOUT TargetNamespace (legacy pattern)
 	bundle := &werfv1alpha1.WerfBundle{
 		ObjectMeta: metav1.ObjectMeta{
@@ -648,7 +720,7 @@ func TestIntegration_NoTargetNamespace_JobInBundleNamespace(t *testing.T) {
 			},
 		},
 	}
-	err := testk8sClient.Create(ctx, bundle)
+	err = testk8sClient.Create(ctx, bundle)
 	if err != nil {
 		t.Fatalf("failed to create WerfBundle: %v", err)
 	}
@@ -950,7 +1022,7 @@ func TestIntegration_CrossNamespaceWithValues_FullFlow(t *testing.T) {
 	}
 
 	// Step 5: Verify Job created in target namespace
-	job := getJobInNamespace(t, ctx, bundleName, "deploy-prod")
+	job := getJobInNamespaceForBundle(t, ctx, bundleName, bundleNs, "deploy-prod")
 	if job.Namespace != "deploy-prod" {
 		t.Errorf("expected Job in target namespace 'deploy-prod', got %v", job.Namespace)
 	}

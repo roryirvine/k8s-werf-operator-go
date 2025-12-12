@@ -462,11 +462,11 @@ func TestIntegration_ValuesFromMissingOptionalSecret_JobCreated(t *testing.T) {
 				ValuesFrom: []werfv1alpha1.ValuesSource{
 					{
 						ConfigMapRef: &corev1.LocalObjectReference{Name: "app-config"},
-						// Required (no Optional flag)
+						// Required (Optional is false by default)
 					},
 					{
 						SecretRef: &corev1.LocalObjectReference{Name: "nonexistent-secret"},
-						Optional:  boolPtr(true), // This one is optional
+						Optional:  true, // This one is optional
 					},
 				},
 			},
@@ -494,11 +494,6 @@ func TestIntegration_ValuesFromMissingOptionalSecret_JobCreated(t *testing.T) {
 	if updatedBundle.Status.Phase != werfv1alpha1.PhaseSyncing {
 		t.Errorf("expected status phase Syncing, got %v", updatedBundle.Status.Phase)
 	}
-}
-
-// boolPtr is a helper to create a pointer to a bool value.
-func boolPtr(b bool) *bool {
-	return &b
 }
 
 // TestIntegration_CrossNamespaceDeployment_JobInTargetNamespace verifies that a WerfBundle

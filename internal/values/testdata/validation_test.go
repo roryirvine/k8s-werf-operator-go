@@ -1,6 +1,7 @@
 package testdata
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -170,10 +171,10 @@ func TestFixtureConsistency(t *testing.T) {
 	}
 }
 
-// hasNameMatch checks if object name matches or is similar to expected prefix.
-// This is lenient because fixture names don't need to exactly match filenames.
+// hasNameMatch checks if object name has the expected prefix.
+// This is lenient - we only check prefix, not exact match.
 func hasNameMatch(name, expectedPrefix string) bool {
-	return len(name) > 0 && len(expectedPrefix) > 0
+	return strings.HasPrefix(name, expectedPrefix)
 }
 
 // TestFixtureDataAccess validates that fixture data is accessible and readable.

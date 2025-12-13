@@ -239,12 +239,13 @@ func TestCreateTestSecretWithValues_DataIsDecodable(t *testing.T) {
 		t.Error("expected YAML data to be non-empty")
 	}
 
-	// Check that the YAML contains our original keys
-	if !contains(yamlData, "db.username") {
-		t.Error("expected YAML to contain 'db.username' key")
+	// Check that the YAML contains our nested keys
+	// (unflatten converts db.username into nested db: username:)
+	if !contains(yamlData, "username") {
+		t.Error("expected YAML to contain 'username' key")
 	}
-	if !contains(yamlData, "db.password") {
-		t.Error("expected YAML to contain 'db.password' key")
+	if !contains(yamlData, "password") {
+		t.Error("expected YAML to contain 'password' key")
 	}
 }
 

@@ -309,9 +309,36 @@ func AssertJobSetFlagsEqual(t interface {
 }
 
 // convertMapToYAML converts a map[string]string to YAML format.
+// Unfolds dot-notation keys into nested structure to match parseYAML expectations.
 // Used internally by ConfigMap and Secret helpers.
 func convertMapToYAML(values map[string]string) (string, error) {
-	data, err := yaml.Marshal(values)
+	// Unflatten dot-notation keys into nested structure
+	unflatten := func(flat map[string]string) map[string]interface{} {
+		res := make(map[string]interface{})
+		for k, v := range flat {
+			parts := strings.Split(k, ".")
+			curr := res
+			for i, part := range parts {
+				if i == len(parts)-1 {
+					curr[part] = v
+					break
+				}
+				if _, ok := curr[part]; !ok {
+					curr[part] = make(map[string]interface{})
+				}
+				next, ok := curr[part].(map[string]interface{})
+				if !ok {
+					next = make(map[string]interface{})
+					curr[part] = next
+				}
+				curr = next
+			}
+		}
+		return res
+	}
+
+	nestedMap := unflatten(values)
+	data, err := yaml.Marshal(nestedMap)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal values to YAML: %w", err)
 	}

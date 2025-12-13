@@ -64,7 +64,9 @@
       "Bash(gh issue edit:*)",
       "mcp__github__issue_read",
       "mcp__github__get_me",
-      "WebFetch(domain:werf.io)"
+      "WebFetch(domain:werf.io)",
+      "Bash(KUBEBUILDER_ASSETS=\"$PWD/bin/k8s/1.34.1-linux-amd64\" make test:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

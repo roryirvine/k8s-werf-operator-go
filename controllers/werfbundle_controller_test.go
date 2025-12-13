@@ -2270,11 +2270,12 @@ func TestReconcile_CrossNamespaceWithSA_CreatesJob(t *testing.T) {
 
 func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
 	ctx := context.Background()
+	const defaultNamespace = "default"
 
 	bundle := &werfv1alpha1.WerfBundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-same-ns-job",
-			Namespace: "default",
+			Namespace: defaultNamespace,
 		},
 		Spec: werfv1alpha1.WerfBundleSpec{
 			Registry: werfv1alpha1.RegistryConfig{
@@ -2301,7 +2302,7 @@ func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
 	}
 
 	req := reconcile.Request{
-		NamespacedName: types.NamespacedName{Name: "test-same-ns-job", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: "test-same-ns-job", Namespace: defaultNamespace},
 	}
 
 	_, err := reconciler.Reconcile(ctx, req)
@@ -2311,7 +2312,7 @@ func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
 
 	// Job should be created in bundle namespace (same-namespace deployment)
 	jobs := &batchv1.JobList{}
-	opts := &client.ListOptions{Namespace: "default"}
+	opts := &client.ListOptions{Namespace: defaultNamespace}
 	if err := testk8sClient.List(ctx, jobs, opts); err != nil {
 		t.Fatalf("failed to list jobs: %v", err)
 	}
@@ -2327,7 +2328,7 @@ func TestReconcile_SameNamespace_CreatesJobInBundleNamespace(t *testing.T) {
 
 	if createdJob == nil {
 		t.Error("expected job to be created for same-namespace deployment")
-	} else if createdJob.Namespace != "default" {
+	} else if createdJob.Namespace != defaultNamespace {
 		t.Errorf("expected job in default (bundle namespace), got %s", createdJob.Namespace)
 	}
 }

@@ -1,0 +1,16 @@
+# Special characters ConfigMap fixture for CLI escaping tests
+# This ConfigMap contains values with Helm special characters that need escaping
+# Tests that values are properly escaped when converted to --set flags
+# Special chars: commas, equals, brackets, backslashes
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: special-chars-values
+  namespace: default
+data:
+  values.yaml: |
+    servers: "host1,host2,host3"
+    environment: "env=production"
+    array: "[1,2,3]"
+    path: "C:\\Users\\app\\config"
+    url: "https://user:pass@example.com/path"

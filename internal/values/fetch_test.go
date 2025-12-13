@@ -9,6 +9,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/werf/k8s-werf-operator-go/internal/values/testdata"
 )
 
 func TestFetchConfigMap(t *testing.T) {
@@ -193,6 +195,72 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// TestFetchConfigMapWithFixtures demonstrates using test fixtures instead of inline data.
+// This test shows how to load ConfigMap fixtures and use them in tests.
+func TestFetchConfigMapWithFixtures(t *testing.T) {
+	tests := []struct {
+		name            string
+		fixture         string
+		bundleNamespace string
+		targetNamespace string
+		cmName          string
+		wantErr         bool
+	}{
+		{
+			name:            "fetch simple fixture in bundle namespace",
+			fixture:         "simple-values.yaml",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			cmName:          "simple-values",
+			wantErr:         false,
+		},
+		{
+			name:            "fetch nested fixture in bundle namespace",
+			fixture:         "nested-values.yaml",
+			bundleNamespace: "bundle-ns",
+			targetNamespace: "target-ns",
+			cmName:          "nested-values",
+			wantErr:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Load fixture - this is cleaner than constructing inline
+			cm, err := testdata.LoadConfigMapFixture(tt.fixture)
+			if err != nil {
+				t.Fatalf("failed to load fixture: %v", err)
+			}
+
+			// Assign to bundle namespace for testing
+			cm.Namespace = tt.bundleNamespace
+
+			// Create fake client with fixture
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(cm).
+				Build()
+
+			// Test fetchConfigMap with fixture data
+			ctx := context.Background()
+			gotData, err := fetchConfigMap(ctx, fakeClient, tt.cmName, tt.bundleNamespace, tt.targetNamespace)
+
+			// Verify error expectation
+			if (err != nil) != tt.wantErr {
+				t.Errorf("fetchConfigMap() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			// Verify we got data (not empty)
+			if !tt.wantErr && len(gotData) == 0 {
+				t.Error("fetchConfigMap() returned empty data")
+			}
+		})
+	}
 }
 
 func TestFetchSecret(t *testing.T) {

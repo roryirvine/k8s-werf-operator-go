@@ -1,0 +1,18 @@
+# Override ConfigMap fixture for testing merge precedence
+# This ConfigMap has keys that overlap with simple-values.yaml but with different values
+# Also includes some unique keys to test selective overriding
+# Used to verify later sources override earlier ones in merge operations
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: override-values
+  namespace: default
+data:
+  values.yaml: |
+    app:
+      name: production-app
+      replicas: 5
+      logging_level: debug
+    monitoring:
+      enabled: true
+      interval: 60

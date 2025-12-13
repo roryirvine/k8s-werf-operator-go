@@ -1,0 +1,14 @@
+# Simple ConfigMap fixture for basic values testing
+# This ConfigMap contains 3-5 simple key-value pairs using realistic application configuration keys
+# Used by tests to verify basic YAML parsing and flattening logic
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simple-values
+  namespace: default
+data:
+  values.yaml: |
+    app:
+      name: my-application
+      replicas: 3
+      environment: staging

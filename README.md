@@ -17,6 +17,8 @@ This is early-stage software (v1alpha1 API). The operator supports bundle deploy
 - Track deployment status in the WerfBundle resource
 - Proper RBAC separation (operator minimal, job permissions namespace-scoped)
 - Capture and retain deployment job logs for troubleshooting
+- External configuration values from ConfigMaps and Secrets with merge precedence
+- Cross-namespace deployments with pre-flight ServiceAccount validation
 
 **What does NOT work yet:**
 - Semantic versioning (tags are sorted lexicographically, not by semver)

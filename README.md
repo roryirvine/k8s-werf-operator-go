@@ -127,6 +127,39 @@ See [PLAN.md](docs/PLAN.md) for the full roadmap including Slice 3+.
    kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
    ```
 
+## Configuration Values
+
+The operator supports external configuration through Kubernetes ConfigMaps and Secrets. This allows you to provide environment-specific values without rebuilding bundles, enabling the same bundle to be deployed across development, staging, and production with different configurations.
+
+**Key features:**
+- Multiple sources can be specified and are merged in order (later sources override earlier ones)
+- Sources can be marked as optional (deployment continues if missing)
+- ConfigMaps and Secrets must contain a `values.yaml` key with YAML content
+- Values are flattened to dot notation and passed as `--set` flags to werf converge
+
+**Example:**
+
+```yaml
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: my-app
+  namespace: k8s-werf-operator-go-system
+spec:
+  registry:
+    url: ghcr.io/org/my-app-bundle
+  converge:
+    serviceAccountName: werf-converge
+    valuesFrom:
+      - configMapRef:
+          name: app-config
+      - secretRef:
+          name: app-secrets
+        optional: true
+```
+
+For detailed examples, merge behavior, and troubleshooting, see the [Configuration Reference](docs/configuration.md).
+
 ## Reliability Features
 
 The operator includes several built-in features to ensure robust registry polling and reliable deployment:

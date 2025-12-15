@@ -160,6 +160,36 @@ spec:
 
 For detailed examples, merge behavior, and troubleshooting, see the [Configuration Reference](docs/configuration.md).
 
+## Multi-namespace Deployment
+
+The operator can deploy applications to namespaces different from where the WerfBundle resource lives. This enables security isolation between the operator and deployed applications, allowing you to manage bundles centrally while deploying to multiple target namespaces.
+
+**Requirements:**
+- ServiceAccount must exist in the target namespace before creating the WerfBundle
+- Without `targetNamespace`, deployment happens in the bundle's namespace (backward compatible)
+- Pre-flight validation ensures the ServiceAccount exists before creating Jobs
+
+**Example:**
+
+```yaml
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: my-app
+  namespace: k8s-werf-operator-go-system
+spec:
+  registry:
+    url: ghcr.io/org/my-app-bundle
+  converge:
+    targetNamespace: production
+    serviceAccountName: werf-deploy
+    resourceLimits:
+      cpu: "2"
+      memory: "2Gi"
+```
+
+For complete RBAC setup instructions and ServiceAccount configuration, see the [RBAC Setup Guide](docs/job-rbac.md).
+
 ## Reliability Features
 
 The operator includes several built-in features to ensure robust registry polling and reliable deployment:

@@ -23,10 +23,8 @@ This is early-stage software (v1alpha1 API). The operator supports bundle deploy
 **What does NOT work yet:**
 - Semantic versioning (tags are sorted lexicographically, not by semver)
 - Advanced registry authentication (access tokens only, no username/password)
-- Cross-namespace deployments
 - Drift detection
 - Helm integration
-- Custom value overrides
 
 See [PLAN.md](docs/PLAN.md) for the full roadmap including Slice 3+.
 

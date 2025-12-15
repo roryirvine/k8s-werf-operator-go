@@ -344,7 +344,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 Current roadmap:
 
 - **Slice 2:** ✓ Enhanced registry integration with ETag caching, exponential backoff, and configurable resource management (complete)
-- **Slice 3:** Values management and cross-namespace deployments
+- **Slice 3:** ✓ Values management and cross-namespace deployments (complete)
 - **Slice 4:** Drift detection and automatic correction
 - **Slice 5:** Advanced features including semantic versioning and username/password auth
 

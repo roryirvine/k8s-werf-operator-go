@@ -221,6 +221,56 @@ kubectl get jobs -n my-app-prod -l app.kubernetes.io/instance=my-app
 kubectl describe job <job-name> -n my-app-prod  # Check Events for auth errors
 ```
 
+### Verify Operator Permissions
+
+The operator runs with a ClusterRole (see `config/rbac/role.yaml`). Verify it has cluster-wide permissions:
+
+```bash
+# Check if operator can read Secrets cluster-wide
+kubectl auth can-i get secrets --all-namespaces \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+
+# Check if operator can list ServiceAccounts cluster-wide
+kubectl auth can-i list serviceaccounts --all-namespaces \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+
+# Check if operator can create Jobs in target namespace
+kubectl auth can-i create jobs -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+
+# Verify operator CANNOT directly create Pods in target namespace (Jobs should)
+kubectl auth can-i create pods -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+# Expected: "no" - operator creates Jobs, not Pods directly
+```
+
+**Note**: Replace `werf-system` with your operator namespace and `my-app-prod` with your target namespace.
+
+### Verify Job ServiceAccount Permissions
+
+Jobs run with namespace-scoped ServiceAccounts. Verify the Job ServiceAccount has required permissions in the target namespace:
+
+```bash
+# Check if Job SA can create Deployments
+kubectl auth can-i create deployments -n my-app-prod \
+  --as=system:serviceaccount:my-app-prod:werf-converge
+
+# Check if Job SA can update Services
+kubectl auth can-i update services -n my-app-prod \
+  --as=system:serviceaccount:my-app-prod:werf-converge
+
+# Check if Job SA can manage Ingresses
+kubectl auth can-i create ingresses -n my-app-prod \
+  --as=system:serviceaccount:my-app-prod:werf-converge
+
+# Verify Job SA CANNOT access other namespaces (security boundary)
+kubectl auth can-i get pods -n other-namespace \
+  --as=system:serviceaccount:my-app-prod:werf-converge
+# Expected: "no" - Jobs are namespace-scoped
+```
+
+If any expected permission returns "no", review your Role and RoleBinding configuration.
+
 ## Troubleshooting
 
 ### ServiceAccount not found error

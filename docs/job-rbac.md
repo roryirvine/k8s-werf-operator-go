@@ -189,6 +189,86 @@ spec:
 
 Make sure to create the ServiceAccount with the matching name in your target namespace.
 
+## Pre-Deployment Verification Checklist
+
+Before creating a WerfBundle, verify RBAC is correctly configured. Follow this checklist in order:
+
+### 1. Target Namespace Exists
+
+```bash
+kubectl get namespace my-app-prod
+# Expected: Namespace details (not "NotFound" error)
+```
+
+If namespace doesn't exist:
+```bash
+kubectl create namespace my-app-prod
+```
+
+### 2. Job ServiceAccount Created
+
+```bash
+kubectl get serviceaccount werf-converge -n my-app-prod
+# Expected: ServiceAccount details
+```
+
+If not found, create the ServiceAccount, Role, and RoleBinding (see "Setting Up Job ServiceAccount" section above).
+
+### 3. Role and RoleBinding Configured
+
+```bash
+# Verify Role exists
+kubectl get role werf-converge -n my-app-prod
+
+# Verify RoleBinding connects SA to Role
+kubectl get rolebinding werf-converge -n my-app-prod -o yaml
+# Check: subjects[0].name == "werf-converge" && roleRef.name == "werf-converge"
+```
+
+### 4. Job Permissions Valid
+
+Run the verification commands from "Verify Job ServiceAccount Permissions" section below.
+
+All `kubectl auth can-i` commands for Job resources should return "yes".
+
+### 5. Operator Can Access Target Namespace
+
+```bash
+# Operator should be able to validate SA exists
+kubectl auth can-i get serviceaccounts -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+# Expected: "yes"
+
+# Operator should be able to create Jobs
+kubectl auth can-i create jobs -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+# Expected: "yes"
+```
+
+### 6. Ready to Deploy
+
+If all checks pass, you can create a WerfBundle targeting this namespace:
+
+```yaml
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: my-app
+  namespace: werf-system
+spec:
+  registry:
+    url: ghcr.io/org/my-app-bundle
+  targetNamespace: my-app-prod
+  converge:
+    serviceAccountName: werf-converge
+```
+
+Monitor the deployment:
+```bash
+kubectl describe werfbundle my-app -n werf-system
+kubectl get jobs -n my-app-prod -l app.kubernetes.io/instance=my-app
+```
+
 ## Verification
 
 To verify your RBAC setup is correct:

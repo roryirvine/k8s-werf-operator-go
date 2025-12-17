@@ -1,0 +1,69 @@
+# Basic ConfigMap Values Example
+#
+# This example demonstrates the simplest values pattern: a single ConfigMap
+# providing configuration values to a WerfBundle deployment.
+#
+# What this example shows:
+# - How to structure a ConfigMap with the required 'values.yaml' key
+# - How to reference the ConfigMap from a WerfBundle
+# - How values are converted to --set flags for werf converge
+#
+# To apply this example:
+# 1. Update the registry URL to point to your actual bundle
+# 2. Ensure the 'production' namespace exists
+# 3. Create a ServiceAccount with appropriate RBAC (see docs/job-rbac.md)
+# 4. Apply: kubectl apply -f values-basic-configmap.yaml
+
+---
+# ConfigMap containing application configuration
+# The 'values.yaml' key is REQUIRED - the operator looks for this specific key
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: k8s-werf-operator-go-system
+data:
+  # values.yaml contains YAML-formatted configuration
+  # These values will be flattened to dot notation and passed as --set flags
+  # Example: app.replicas: 3 becomes --set app.replicas=3
+  values.yaml: |
+    app:
+      name: frontend-app
+      replicas: 3
+      environment: production
+      logLevel: info
+      timeout: 30s
+
+---
+# WerfBundle that uses the ConfigMap for configuration values
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: frontend-app
+  namespace: k8s-werf-operator-go-system
+spec:
+  registry:
+    # Update this URL to point to your actual OCI registry
+    url: ghcr.io/org/frontend-app-bundle
+    pollInterval: 15m
+
+  converge:
+    # Target namespace where the application will be deployed
+    targetNamespace: production
+
+    # ServiceAccount must exist in the target namespace with deploy permissions
+    serviceAccountName: werf-converge
+
+    # Resource limits for the werf converge Job
+    resourceLimits:
+      cpu: "2"
+      memory: "2Gi"
+
+    # valuesFrom specifies sources of configuration values
+    # Values are processed in array order and merged
+    # Each source must have a 'values.yaml' key containing YAML data
+    valuesFrom:
+      - configMapRef:
+          name: app-config
+        # optional: false is the default - deployment fails if ConfigMap is missing
+        # We'll see optional: true in the values-optional-secret.yaml example

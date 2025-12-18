@@ -584,6 +584,185 @@ kubectl get pods -n werf-system -l control-plane=controller-manager
 kubectl logs -n werf-system -l control-plane=controller-manager --tail=100
 ```
 
+## Common RBAC Mistakes
+
+Learn from common configuration errors to avoid troubleshooting later.
+
+### Mistake 1: Using RoleBinding Instead of ClusterRoleBinding for Operator
+
+**What happened**:
+```bash
+# Created RoleBinding in operator namespace
+kubectl create rolebinding werf-operator-binding \
+  --clusterrole=werf-operator-manager-role \
+  --serviceaccount=werf-system:werf-operator-controller-manager \
+  -n werf-system
+```
+
+**Why this breaks**:
+RoleBinding only grants permissions within the namespace where it's created (`werf-system`). The operator can't access other namespaces for cross-namespace deployments.
+
+**Correct approach**:
+```bash
+# Use ClusterRoleBinding for cluster-wide permissions
+kubectl create clusterrolebinding werf-operator-binding \
+  --clusterrole=werf-operator-manager-role \
+  --serviceaccount=werf-system:werf-operator-controller-manager
+```
+
+ClusterRoleBinding grants the ClusterRole's permissions across ALL namespaces.
+
+**How to check**:
+```bash
+# Should return results
+kubectl get clusterrolebinding | grep werf-operator
+
+# Should return nothing
+kubectl get rolebinding -n werf-system | grep werf-operator
+```
+
+---
+
+### Mistake 2: Creating Job ServiceAccount in Operator Namespace
+
+**What happened**:
+```bash
+# Created SA in wrong namespace
+kubectl create serviceaccount werf-converge -n werf-system
+```
+
+WerfBundle points to different target namespace:
+```yaml
+spec:
+  targetNamespace: my-app-prod  # But SA is in werf-system
+  converge:
+    serviceAccountName: werf-converge
+```
+
+**Why this breaks**:
+Jobs run in the target namespace (`my-app-prod`) and look for ServiceAccount there. Operator validates ServiceAccount exists in target namespace, not operator namespace.
+
+**Correct approach**:
+Create ServiceAccount in the SAME namespace where Jobs will run (target namespace):
+```bash
+kubectl create serviceaccount werf-converge -n my-app-prod
+```
+
+**Rule of thumb**: Job ServiceAccount lives in target namespace, operator ServiceAccount lives in operator namespace.
+
+---
+
+### Mistake 3: Reusing Same ServiceAccount Name Across Namespaces Without Proper Permissions
+
+**What happened**:
+```bash
+# Created SA in multiple namespaces with same name
+kubectl create serviceaccount werf-converge -n dev
+kubectl create serviceaccount werf-converge -n prod
+
+# Created Role in dev with minimal permissions
+kubectl create role werf-converge --verb=get --resource=pods -n dev
+
+# Copied Role to prod without reviewing
+kubectl get role werf-converge -n dev -o yaml | kubectl apply -f - -n prod
+```
+
+**Why this might break**:
+Prod deployments may need different permissions than dev (e.g., ingresses, persistent volumes). Same Role name doesn't mean appropriate permissions.
+
+**Correct approach**:
+Evaluate permissions per environment:
+```bash
+# Dev: minimal permissions for testing
+kubectl create role werf-converge --verb=get,list --resource=pods,services -n dev
+
+# Prod: full deployment permissions
+kubectl create role werf-converge \
+  --verb=create,update,delete,get,list,watch \
+  --resource=pods,services,deployments,ingresses -n prod
+```
+
+Review Role for each namespace based on what that environment deploys.
+
+---
+
+### Mistake 4: Forgetting ServiceAccountName in Cross-Namespace Deployments
+
+**What happened**:
+```yaml
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: my-app
+  namespace: werf-system
+spec:
+  targetNamespace: my-app-prod
+  # Missing: converge.serviceAccountName
+```
+
+**Why this breaks**:
+Cross-namespace deployments require explicit ServiceAccount (no default). Operator fails validation:
+```
+serviceAccountName is required for cross-namespace deployment from namespace 'werf-system' to 'my-app-prod'
+```
+
+**Correct approach**:
+Always specify ServiceAccount for cross-namespace deployments:
+```yaml
+spec:
+  targetNamespace: my-app-prod
+  converge:
+    serviceAccountName: werf-converge
+```
+
+**Note**: Same-namespace deployments (no `targetNamespace` or same as bundle namespace) can omit `serviceAccountName` for backward compatibility.
+
+---
+
+### Mistake 5: Assuming Operator Permissions = Job Permissions
+
+**What happened**:
+"I gave the operator ClusterRole with full admin permissions. Why can't my Jobs create Pods?"
+
+**Why this breaks**:
+Operator permissions ≠ Job permissions. They use different ServiceAccounts:
+- **Operator**: Uses `werf-operator-controller-manager` SA in operator namespace
+- **Job**: Uses ServiceAccount specified in `spec.converge.serviceAccountName` in target namespace
+
+Operator creates Jobs, but Jobs run with their own SA.
+
+**Correct approach**:
+Configure BOTH:
+1. **Operator ClusterRole**: Permissions to read config and create Jobs (already configured in `config/rbac/role.yaml`)
+2. **Job Role**: Permissions to deploy application resources (you configure per namespace)
+
+See the "Split RBAC Model" section for the security rationale behind this design.
+
+---
+
+### Mistake 6: Testing Permissions with Wrong ServiceAccount
+
+**What happened**:
+```bash
+# Tested with your own user account
+kubectl auth can-i create deployments -n my-app-prod
+# Returns "yes" because you're cluster-admin
+
+# But Job fails with permission denied
+```
+
+**Why this breaks**:
+Your user account likely has more permissions than the Job ServiceAccount. Test must impersonate the actual ServiceAccount the Job will use.
+
+**Correct approach**:
+```bash
+# Test as the Job ServiceAccount
+kubectl auth can-i create deployments -n my-app-prod \
+  --as=system:serviceaccount:my-app-prod:werf-converge
+```
+
+Always use `--as=system:serviceaccount:NAMESPACE:SA_NAME` when testing RBAC.
+
 ## Security Notes
 
 - ServiceAccount tokens are automatically mounted into Pods created with that ServiceAccount

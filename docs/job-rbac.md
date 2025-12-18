@@ -269,6 +269,80 @@ kubectl describe werfbundle my-app -n werf-system
 kubectl get jobs -n my-app-prod -l app.kubernetes.io/instance=my-app
 ```
 
+## Cross-Namespace Verification
+
+The operator's primary use case is cross-namespace deployment (operator in `werf-system`, apps in other namespaces). Verify the operator can access target namespaces.
+
+### Understanding Cross-Namespace Access
+
+The operator needs:
+- **ServiceAccount validation**: Read ServiceAccounts in target namespace (pre-flight check)
+- **Secrets resolution**: Read registry credentials and values from target namespace
+- **Job creation**: Create Jobs in target namespace (not just operator namespace)
+
+These permissions come from a **ClusterRole** bound via **ClusterRoleBinding** (see `config/rbac/role.yaml` and `config/rbac/role_binding.yaml`).
+
+### Verify Operator Cross-Namespace Permissions
+
+Test if operator can perform required operations in a different namespace:
+
+```bash
+# Replace 'werf-system' with operator namespace
+# Replace 'my-app-prod' with target namespace
+
+# 1. Operator must validate ServiceAccount exists
+kubectl auth can-i get serviceaccounts -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+# Expected: "yes"
+
+# 2. Operator must read Secrets for registry credentials
+kubectl auth can-i get secrets -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+# Expected: "yes"
+
+# 3. Operator must create Jobs in target namespace
+kubectl auth can-i create jobs -n my-app-prod \
+  --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+# Expected: "yes"
+```
+
+If any command returns "no", verify:
+
+1. **ClusterRole exists and has required rules**:
+```bash
+kubectl get clusterrole werf-operator-manager-role -o yaml
+# Check for rules with resources: [serviceaccounts, secrets, jobs]
+```
+
+2. **ClusterRoleBinding exists and binds to operator ServiceAccount**:
+```bash
+kubectl get clusterrolebinding werf-operator-manager-rolebinding -o yaml
+# Check subjects[0].name == "werf-operator-controller-manager"
+# Check subjects[0].namespace == "werf-system" (your operator namespace)
+# Check roleRef.name == "werf-operator-manager-role"
+```
+
+3. **NOT using RoleBinding** (common mistake):
+```bash
+# This should return no results (RoleBinding is namespace-scoped, won't work)
+kubectl get rolebinding -n werf-system | grep werf-operator
+```
+
+### Testing Multiple Target Namespaces
+
+If deploying to multiple namespaces, test operator permissions for each:
+
+```bash
+for ns in my-app-dev my-app-staging my-app-prod; do
+  echo "Testing namespace: $ns"
+  kubectl auth can-i get serviceaccounts -n $ns \
+    --as=system:serviceaccount:werf-system:werf-operator-controller-manager
+done
+# Expected: "yes" for all namespaces
+```
+
+ClusterRole permissions are cluster-wide; if they work for one namespace, they work for all. This test verifies the ClusterRoleBinding is correctly configured.
+
 ## Verification
 
 To verify your RBAC setup is correct:

@@ -336,6 +336,147 @@ kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
   '{"spec":{"converge":{"serviceAccountName":"werf-converge"}}}'
 ```
 
+### Issue: Unauthorized or permission denied errors in Job pod
+
+**Diagnosis**: Job pod starts but fails with permission errors when trying to deploy resources.
+
+```bash
+# Check Job status
+kubectl get job -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app
+
+# Check pod logs for permission errors
+kubectl logs job/<job-name> -n k8s-werf-operator-go-system | grep -i "unauthorized\|forbidden\|permission"
+# Look for errors like:
+# "Error from server (Forbidden): deployments.apps is forbidden"
+# "Error: UPGRADE FAILED: ... is forbidden: User ... cannot create resource"
+# "error: failed to create: ... is forbidden"
+
+# Check WerfBundle status
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# lastJobStatus: Failed
+# lastJobLogs may show permission errors
+```
+
+**Root Cause**: The ServiceAccount referenced in `spec.converge.serviceAccountName` exists in the target namespace, but lacks the RBAC permissions needed to create/update resources during deployment.
+
+**Solution**: Verify and fix RBAC permissions for the ServiceAccount.
+
+**Step 1: Verify ServiceAccount exists**
+
+```bash
+# Get ServiceAccount and target namespace from bundle
+SA_NAME=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.serviceAccountName}' -n k8s-werf-operator-go-system)
+TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system)
+
+# If TARGET_NS is empty, use bundle namespace
+if [ -z "$TARGET_NS" ]; then
+  TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system)
+fi
+
+# Check ServiceAccount exists
+kubectl get serviceaccount $SA_NAME -n $TARGET_NS
+```
+
+**Step 2: Test ServiceAccount permissions**
+
+Use `kubectl auth can-i` to verify the ServiceAccount has necessary permissions:
+
+```bash
+# Test common permissions needed for deployments
+kubectl auth can-i create deployments --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create services --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create configmaps --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create secrets --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create ingresses --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i update deployments --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+# Expected: "yes" for all
+
+# If any return "no", the ServiceAccount lacks permissions
+```
+
+**Step 3: Verify RoleBinding exists and is correct**
+
+```bash
+# Check if RoleBinding exists for the ServiceAccount
+kubectl get rolebinding -n $TARGET_NS -o yaml | grep -A 10 "name: $SA_NAME"
+
+# Or list all RoleBindings in the namespace
+kubectl get rolebinding -n $TARGET_NS
+
+# Check specific RoleBinding details
+kubectl describe rolebinding <rolebinding-name> -n $TARGET_NS
+# Verify:
+# - subjects[].name matches ServiceAccount name
+# - subjects[].namespace matches target namespace
+# - roleRef.name references a Role with sufficient permissions
+```
+
+**Step 4: Fix missing or incorrect RBAC**
+
+If RoleBinding is missing or incorrect, create/update it:
+
+```bash
+# Create Role with broad permissions (adjust based on your needs)
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: $SA_NAME
+  namespace: $TARGET_NS
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+EOF
+
+# Create RoleBinding
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: $SA_NAME
+  namespace: $TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: $SA_NAME
+subjects:
+- kind: ServiceAccount
+  name: $SA_NAME
+  namespace: $TARGET_NS
+EOF
+```
+
+**Note**: The above Role grants broad permissions (`*/*`). For production, you should scope permissions to only what your application needs. See [RBAC documentation](job-rbac.md) for guidance on creating minimal permissions.
+
+**Step 5: Verify fix worked**
+
+After creating/updating RBAC, trigger a new deployment:
+
+```bash
+# Trigger reconciliation by updating bundle
+kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
+  '{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"'$(date +%Y-%m-%dT%H:%M:%S%z)'"}}}'
+
+# Watch for new Job creation
+kubectl get jobs -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app -w
+
+# Check Job logs to verify permissions work
+kubectl logs job/<new-job-name> -n k8s-werf-operator-go-system
+```
+
+**Common permission issues**:
+
+| Missing Permission | Symptom in Logs | Solution |
+|-------------------|-----------------|----------|
+| `create deployments` | "deployments.apps is forbidden" | Add to Role rules |
+| `create services` | "services is forbidden" | Add to Role rules |
+| `create ingresses` | "ingresses.networking.k8s.io is forbidden" | Add to Role rules |
+| `update/patch resources` | "cannot patch resource" | Add `update` and `patch` verbs |
+| Wrong namespace in RoleBinding | All operations forbidden | Fix subjects[].namespace in RoleBinding |
+
+See [RBAC Setup Guide](job-rbac.md) for complete cross-namespace RBAC configuration and minimal permission examples.
+
 ### Issue: ConfigMap or Secret not found in values resolution
 
 **Diagnosis**: Bundle fails with ConfigMap or Secret not found during values resolution.

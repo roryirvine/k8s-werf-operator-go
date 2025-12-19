@@ -41,6 +41,49 @@ The operator itself runs with a **ClusterRole** that grants cluster-wide permiss
 | WerfBundles | `update`, `patch` | Update WerfBundle status |
 | WerfBundles/status | `update`, `patch` | Update WerfBundle status subresource |
 
+### Generated ClusterRole Location
+
+The operator's ClusterRole is generated from kubebuilder RBAC markers in the controller source code.
+
+**Generated manifests**:
+- `config/rbac/role.yaml` - ClusterRole with all operator permissions
+- `config/rbac/role_binding.yaml` - ClusterRoleBinding connecting ClusterRole to operator ServiceAccount
+
+**Source markers** (in `controllers/werfbundle_controller.go`):
+```go
+// +kubebuilder:rbac:groups=werf.io,resources=werfbundles,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;get;list;watch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;update;get;list
+```
+
+These markers are processed by `make manifests` to generate `config/rbac/role.yaml`.
+
+**When deploying the operator**:
+```bash
+# Apply generated RBAC manifests
+kubectl apply -f config/rbac/role.yaml
+kubectl apply -f config/rbac/role_binding.yaml
+kubectl apply -f config/rbac/service_account.yaml
+```
+
+**Verifying deployed RBAC matches generated manifests**:
+```bash
+# Check deployed ClusterRole
+kubectl get clusterrole werf-operator-manager-role -o yaml
+
+# Compare with generated file
+diff <(kubectl get clusterrole werf-operator-manager-role -o yaml) config/rbac/role.yaml
+```
+
+If you modify RBAC markers in the controller, regenerate manifests:
+```bash
+make manifests
+```
+
+**Note**: Don't manually edit `config/rbac/role.yaml` - changes will be overwritten by `make manifests`. Modify the kubebuilder markers in controller source code instead.
+
 ### Why Cluster-Wide Access?
 
 Cross-namespace deployments require the operator to:

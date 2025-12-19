@@ -336,6 +336,115 @@ kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
   '{"spec":{"converge":{"serviceAccountName":"werf-converge"}}}'
 ```
 
+### Issue: ConfigMap or Secret not found in values resolution
+
+**Diagnosis**: Bundle fails with ConfigMap or Secret not found during values resolution.
+
+```bash
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# lastErrorMessage: "failed to get ConfigMap 'app-config' from namespace '...'"
+# OR: "configMap 'app-config' not found in namespaces '...' or '...'"
+# phase: Failed
+```
+
+**Root Cause**: A ConfigMap or Secret referenced in `spec.converge.valuesFrom` doesn't exist in the expected namespace(s).
+
+**Scenarios and Solutions**:
+
+**Scenario 1: Single namespace lookup failure**
+
+Error: `"failed to get ConfigMap 'app-config' from namespace 'k8s-werf-operator-go-system'"`
+
+The operator looks for the ConfigMap/Secret in the bundle namespace only (when targetNamespace is not set, or when it's the same as the bundle namespace).
+
+```bash
+# Check if ConfigMap exists in bundle namespace
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+
+# If it doesn't exist, create it
+kubectl create configmap app-config --from-literal=key=value -n k8s-werf-operator-go-system
+
+# Or create from YAML file
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: k8s-werf-operator-go-system
+data:
+  config.yaml: |
+    app:
+      replicas: 3
+      image: myapp:latest
+EOF
+```
+
+**Scenario 2: Cross-namespace lookup failure**
+
+Error: `"configMap 'app-config' not found in namespaces 'k8s-werf-operator-go-system' or 'production'"`
+
+For cross-namespace deployments (when targetNamespace differs from bundle namespace), the operator checks both namespaces in this order:
+1. Bundle namespace first (operator namespace, admin-controlled)
+2. Target namespace second (application namespace)
+
+```bash
+# Check bundle namespace vs target namespace
+kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system
+# Output: k8s-werf-operator-go-system
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system
+# Output: production
+
+# Check if ConfigMap exists in either namespace
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+kubectl get configmap app-config -n production
+```
+
+**Where to create the ConfigMap**:
+- **Bundle namespace** (operator namespace): For admin-controlled values that should override app-team settings
+- **Target namespace** (application namespace): For app-team-controlled values
+
+Bundle namespace takes precedence if the ConfigMap exists in both locations.
+
+```bash
+# Create in target namespace (app-team controlled)
+kubectl create configmap app-config --from-literal=key=value -n production
+
+# OR create in bundle namespace (admin override)
+kubectl create configmap app-config --from-literal=key=value -n k8s-werf-operator-go-system
+```
+
+**Scenario 3: Required vs optional sources**
+
+By default, all valuesFrom sources are required. If a required source is missing, the bundle fails.
+
+```bash
+# Check if source is marked optional
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system | grep -A 3 valuesFrom
+```
+
+To mark a source as optional (skipped if missing):
+
+```yaml
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: base-config        # Required - fails if missing
+      - configMapRef:
+          name: env-overrides
+        optional: true             # Optional - skipped if missing
+```
+
+Apply the change:
+
+```bash
+kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
+  '{"spec":{"converge":{"valuesFrom":[{"configMapRef":{"name":"env-overrides"},"optional":true}]}}}'
+```
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for valuesFrom examples and patterns.
+
 ## Understanding Status Fields
 
 These fields in `kubectl describe werfbundle` help diagnose issues:

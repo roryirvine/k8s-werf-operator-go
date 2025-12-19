@@ -445,6 +445,161 @@ kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
 
 See [Configuration Reference](configuration.md#valuesFrom-Optional) for valuesFrom examples and patterns.
 
+### Issue: Values from ConfigMaps/Secrets not being applied to deployment
+
+**Diagnosis**: Deployment succeeds, but configuration values are incorrect or missing.
+
+```bash
+# Check if Job succeeded
+kubectl get job -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app
+
+# Check WerfBundle status
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# phase: Synced (deployment succeeded)
+# But deployed app has wrong configuration
+```
+
+**Root Cause**: Values are being resolved, but not applied correctly or overridden unexpectedly.
+
+**Scenarios and Solutions**:
+
+**Scenario 1: YAML parsing errors in ConfigMap/Secret**
+
+ConfigMap contains invalid YAML that can't be parsed.
+
+```bash
+# Check Job pod logs for parsing errors
+kubectl logs job/<job-name> -n k8s-werf-operator-go-system | grep -i "yaml\|parse\|unmarshal"
+# Look for errors like: "yaml: line X: mapping values are not allowed"
+
+# Verify ConfigMap contains valid YAML
+kubectl get configmap app-config -n k8s-werf-operator-go-system -o yaml
+```
+
+Test YAML locally:
+
+```bash
+# Extract and validate YAML
+kubectl get configmap app-config -n k8s-werf-operator-go-system -o jsonpath='{.data}' | yq .
+
+# Or test with Python
+kubectl get configmap app-config -n k8s-werf-operator-go-system -o jsonpath='{.data.config\.yaml}' | python3 -c "import yaml, sys; yaml.safe_load(sys.stdin)"
+```
+
+Fix the YAML in your ConfigMap:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: k8s-werf-operator-go-system
+data:
+  config.yaml: |
+    app:
+      replicas: 3
+      image: "myapp:latest"  # Properly quoted
+```
+
+**Scenario 2: Values merge precedence confusion**
+
+Later sources should override earlier ones, but don't seem to.
+
+Values are merged in order - later sources override earlier ones for the same keys:
+
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: base-config      # Applied first
+  - configMapRef:
+      name: prod-overrides   # Applied second - overrides base-config
+```
+
+```bash
+# View the order of valuesFrom sources
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system | grep -A 10 valuesFrom
+
+# Check Job args to see actual --set flags applied
+kubectl get job <job-name> -n k8s-werf-operator-go-system -o yaml | grep -A 30 "args:"
+# Each --set flag represents a resolved value
+```
+
+Check your ConfigMaps to verify which source provides which values:
+
+```bash
+# View first source
+kubectl get configmap base-config -o yaml -n k8s-werf-operator-go-system
+
+# View second source (should override)
+kubectl get configmap prod-overrides -o yaml -n k8s-werf-operator-go-system
+```
+
+If precedence isn't working as expected, verify the key paths are identical (exact match required for override).
+
+**Scenario 3: Values from wrong namespace (cross-namespace precedence)**
+
+For cross-namespace deployments, the operator checks namespaces in this order:
+1. **Bundle namespace first** (operator namespace, admin-controlled) - takes precedence
+2. **Target namespace second** (application namespace)
+
+If both namespaces have a ConfigMap with the same name, bundle namespace wins.
+
+```bash
+# Check which namespace's ConfigMap is being used
+kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system
+# Output: k8s-werf-operator-go-system (bundle namespace)
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system
+# Output: production (target namespace)
+
+# Check if ConfigMap exists in both namespaces
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+kubectl get configmap app-config -n production
+```
+
+If bundle namespace ConfigMap exists, it's used regardless of target namespace ConfigMap.
+
+To use target namespace values, either:
+- Delete ConfigMap from bundle namespace, OR
+- Rename ConfigMap in bundle namespace to avoid conflict
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for namespace precedence patterns.
+
+**Scenario 4: Values don't match werf bundle schema**
+
+Deployment succeeds but configuration is wrong because values don't match the bundle's expected schema.
+
+```bash
+# Check the werf bundle's werf.yaml for expected values
+# (This requires inspecting the bundle image or documentation)
+
+# View what values are being passed
+kubectl get job <job-name> -n k8s-werf-operator-go-system -o yaml | grep -A 30 "args:" | grep "set"
+```
+
+Example mismatch:
+
+```yaml
+# ConfigMap provides (wrong key path)
+data:
+  config.yaml: |
+    replicas: 3
+
+# But werf bundle expects (correct key path)
+# app.replicas: 3
+```
+
+Fix by aligning ConfigMap structure with bundle schema:
+
+```yaml
+data:
+  config.yaml: |
+    app:
+      replicas: 3
+```
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for valuesFrom structure examples.
+
 ## Understanding Status Fields
 
 These fields in `kubectl describe werfbundle` help diagnose issues:

@@ -812,6 +812,150 @@ kubectl logs <pod-name> -n k8s-werf-operator-go-system -c werf --previous
 kubectl describe pod <pod-name> -n k8s-werf-operator-go-system | grep -A 20 "Containers"
 ```
 
+### Debugging values and multi-namespace deployments
+
+Systematic workflow for diagnosing issues with Slice 3 features (valuesFrom and targetNamespace).
+
+**Step 1: Verify WerfBundle configuration**
+
+Check if values and multi-namespace features are configured correctly:
+
+```bash
+# Get full WerfBundle spec
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system
+
+# Check specific fields
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system
+# Output: production (if cross-namespace) or empty (same namespace)
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.serviceAccountName}' -n k8s-werf-operator-go-system
+# Output: werf-converge (required for cross-namespace)
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.valuesFrom[*].configMapRef.name}' -n k8s-werf-operator-go-system
+# Output: List of ConfigMap names
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.valuesFrom[*].secretRef.name}' -n k8s-werf-operator-go-system
+# Output: List of Secret names
+```
+
+Verify:
+- Is `targetNamespace` set for cross-namespace deployment?
+- Is `serviceAccountName` set (required when targetNamespace differs from bundle namespace)?
+- Are `valuesFrom` sources listed?
+- Are any sources marked `optional: true`?
+
+**Step 2: Check if values sources exist**
+
+For each ConfigMap/Secret in valuesFrom, check if it exists:
+
+```bash
+# Get bundle and target namespaces
+BUNDLE_NS=$(kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system)
+TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system)
+
+# If TARGET_NS is empty, it's same-namespace deployment
+if [ -z "$TARGET_NS" ]; then
+  TARGET_NS=$BUNDLE_NS
+fi
+
+# Check each ConfigMap
+kubectl get configmap <name> -n $BUNDLE_NS
+kubectl get configmap <name> -n $TARGET_NS  # If cross-namespace
+
+# Check each Secret
+kubectl get secret <name> -n $BUNDLE_NS
+kubectl get secret <name> -n $TARGET_NS  # If cross-namespace
+```
+
+Remember namespace precedence for cross-namespace:
+1. Bundle namespace checked first (admin-controlled)
+2. Target namespace checked second (app-controlled)
+
+**Step 3: Verify operator can read values sources**
+
+Check that operator has permissions to read ConfigMaps and Secrets:
+
+```bash
+# Check operator ClusterRole
+kubectl get clusterrole werf-operator -o yaml | grep -A 5 "configmaps\|secrets"
+
+# Expected output:
+# - apiGroups: [""]
+#   resources: ["configmaps", "secrets"]
+#   verbs: ["get", "list"]
+```
+
+If permissions are missing, check [job-rbac.md](job-rbac.md) for operator RBAC setup.
+
+**Step 4: Check Job creation and status**
+
+Verify that Jobs are being created and check their status:
+
+```bash
+# Find recent Jobs for this bundle
+kubectl get jobs -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app --sort-by=.metadata.creationTimestamp
+
+# Get most recent Job name
+JOB_NAME=$(kubectl get jobs -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+
+# Check Job status
+kubectl describe job $JOB_NAME -n k8s-werf-operator-go-system
+
+# Get Job pod name
+POD_NAME=$(kubectl get pods -n k8s-werf-operator-go-system -l job-name=$JOB_NAME -o jsonpath='{.items[0].metadata.name}')
+
+# Check pod logs for values being applied
+kubectl logs $POD_NAME -n k8s-werf-operator-go-system | grep -E "set|values"
+# Look for --set flags showing resolved values
+
+# View Job command and args to see --set flags
+kubectl get job $JOB_NAME -o yaml -n k8s-werf-operator-go-system | grep -A 30 "args:"
+```
+
+**Step 5: Verify ServiceAccount for cross-namespace deployments**
+
+If using `targetNamespace`, verify the ServiceAccount exists and has permissions:
+
+```bash
+# Get ServiceAccount name from bundle
+SA_NAME=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.serviceAccountName}' -n k8s-werf-operator-go-system)
+TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system)
+
+# Check if ServiceAccount exists in target namespace
+kubectl get serviceaccount $SA_NAME -n $TARGET_NS
+
+# Verify ServiceAccount has required permissions
+kubectl auth can-i create deployments --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create services --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create configmaps --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+# Expected: yes for all
+```
+
+If permissions are missing, see [job-rbac.md](job-rbac.md) for complete RBAC setup guide.
+
+**Step 6: Check WerfBundle status for specific errors**
+
+```bash
+# Check status fields
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+
+# Look for these indicators:
+# - phase: Failed (indicates permanent failure)
+# - lastErrorMessage: Contains specific error
+# - lastJobStatus: Failed (Job failed)
+# - lastJobLogs: May contain truncated logs (check pod logs for full output)
+```
+
+Common error patterns:
+- `"ServiceAccount 'X' not found"` → See Step 5 above
+- `"failed to get ConfigMap 'X'"` → See Step 2 above
+- `"source X: ConfigMapRef name is empty"` → Fix valuesFrom configuration
+- `"configMap 'X' not found in namespaces 'Y' or 'Z'"` → Create ConfigMap in appropriate namespace
+
+**Related documentation**:
+- [job-rbac.md](job-rbac.md) - Complete RBAC setup guide for cross-namespace deployments
+- [configuration.md](configuration.md) - valuesFrom examples, namespace precedence, and patterns
+
 ## Getting Help
 
 If you're stuck, gather this information for debugging:

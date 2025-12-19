@@ -336,6 +336,521 @@ kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
   '{"spec":{"converge":{"serviceAccountName":"werf-converge"}}}'
 ```
 
+### Issue: Unauthorized or permission denied errors in Job pod
+
+**Diagnosis**: Job pod starts but fails with permission errors when trying to deploy resources.
+
+```bash
+# Check Job status
+kubectl get job -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app
+
+# Check pod logs for permission errors
+kubectl logs job/<job-name> -n k8s-werf-operator-go-system | grep -i "unauthorized\|forbidden\|permission"
+# Look for errors like:
+# "Error from server (Forbidden): deployments.apps is forbidden"
+# "Error: UPGRADE FAILED: ... is forbidden: User ... cannot create resource"
+# "error: failed to create: ... is forbidden"
+
+# Check WerfBundle status
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# lastJobStatus: Failed
+# lastJobLogs may show permission errors
+```
+
+**Root Cause**: The ServiceAccount referenced in `spec.converge.serviceAccountName` exists in the target namespace, but lacks the RBAC permissions needed to create/update resources during deployment.
+
+**Solution**: Verify and fix RBAC permissions for the ServiceAccount.
+
+**Step 1: Verify ServiceAccount exists**
+
+```bash
+# Get ServiceAccount and target namespace from bundle
+SA_NAME=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.serviceAccountName}' -n k8s-werf-operator-go-system)
+TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system)
+
+# If TARGET_NS is empty, use bundle namespace
+if [ -z "$TARGET_NS" ]; then
+  TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system)
+fi
+
+# Check ServiceAccount exists
+kubectl get serviceaccount $SA_NAME -n $TARGET_NS
+```
+
+**Step 2: Test ServiceAccount permissions**
+
+Use `kubectl auth can-i` to verify the ServiceAccount has necessary permissions:
+
+```bash
+# Test common permissions needed for deployments
+kubectl auth can-i create deployments --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create services --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create configmaps --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create secrets --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create ingresses --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i update deployments --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+# Expected: "yes" for all
+
+# If any return "no", the ServiceAccount lacks permissions
+```
+
+**Step 3: Verify RoleBinding exists and is correct**
+
+```bash
+# Check if RoleBinding exists for the ServiceAccount
+kubectl get rolebinding -n $TARGET_NS -o yaml | grep -A 10 "name: $SA_NAME"
+
+# Or list all RoleBindings in the namespace
+kubectl get rolebinding -n $TARGET_NS
+
+# Check specific RoleBinding details
+kubectl describe rolebinding <rolebinding-name> -n $TARGET_NS
+# Verify:
+# - subjects[].name matches ServiceAccount name
+# - subjects[].namespace matches target namespace
+# - roleRef.name references a Role with sufficient permissions
+```
+
+**Step 4: Fix missing or incorrect RBAC**
+
+If RoleBinding is missing or incorrect, create/update it:
+
+```bash
+# Create Role with broad permissions (adjust based on your needs)
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: $SA_NAME
+  namespace: $TARGET_NS
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+EOF
+
+# Create RoleBinding
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: $SA_NAME
+  namespace: $TARGET_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: $SA_NAME
+subjects:
+- kind: ServiceAccount
+  name: $SA_NAME
+  namespace: $TARGET_NS
+EOF
+```
+
+**Note**: The above Role grants broad permissions (`*/*`). For production, you should scope permissions to only what your application needs. See [RBAC documentation](job-rbac.md) for guidance on creating minimal permissions.
+
+**Step 5: Verify fix worked**
+
+After creating/updating RBAC, trigger a new deployment:
+
+```bash
+# Trigger reconciliation by updating bundle
+kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
+  '{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"'$(date +%Y-%m-%dT%H:%M:%S%z)'"}}}'
+
+# Watch for new Job creation
+kubectl get jobs -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app -w
+
+# Check Job logs to verify permissions work
+kubectl logs job/<new-job-name> -n k8s-werf-operator-go-system
+```
+
+**Common permission issues**:
+
+| Missing Permission | Symptom in Logs | Solution |
+|-------------------|-----------------|----------|
+| `create deployments` | "deployments.apps is forbidden" | Add to Role rules |
+| `create services` | "services is forbidden" | Add to Role rules |
+| `create ingresses` | "ingresses.networking.k8s.io is forbidden" | Add to Role rules |
+| `update/patch resources` | "cannot patch resource" | Add `update` and `patch` verbs |
+| Wrong namespace in RoleBinding | All operations forbidden | Fix subjects[].namespace in RoleBinding |
+
+See [RBAC Setup Guide](job-rbac.md) for complete cross-namespace RBAC configuration and minimal permission examples.
+
+### Issue: ConfigMap or Secret not found in values resolution
+
+**Diagnosis**: Bundle fails with ConfigMap or Secret not found during values resolution.
+
+```bash
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# lastErrorMessage: "failed to get ConfigMap 'app-config' from namespace '...'"
+# OR: "configMap 'app-config' not found in namespaces '...' or '...'"
+# phase: Failed
+```
+
+**Root Cause**: A ConfigMap or Secret referenced in `spec.converge.valuesFrom` doesn't exist in the expected namespace(s).
+
+**Scenarios and Solutions**:
+
+**Scenario 1: Single namespace lookup failure**
+
+Error: `"failed to get ConfigMap 'app-config' from namespace 'k8s-werf-operator-go-system'"`
+
+The operator looks for the ConfigMap/Secret in the bundle namespace only (when targetNamespace is not set, or when it's the same as the bundle namespace).
+
+```bash
+# Check if ConfigMap exists in bundle namespace
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+
+# If it doesn't exist, create it
+kubectl create configmap app-config --from-literal=key=value -n k8s-werf-operator-go-system
+
+# Or create from YAML file
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: k8s-werf-operator-go-system
+data:
+  config.yaml: |
+    app:
+      replicas: 3
+      image: myapp:latest
+EOF
+```
+
+**Scenario 2: Cross-namespace lookup failure**
+
+Error: `"configMap 'app-config' not found in namespaces 'k8s-werf-operator-go-system' or 'production'"`
+
+For cross-namespace deployments (when targetNamespace differs from bundle namespace), the operator checks both namespaces in this order:
+1. Bundle namespace first (operator namespace, admin-controlled)
+2. Target namespace second (application namespace)
+
+```bash
+# Check bundle namespace vs target namespace
+kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system
+# Output: k8s-werf-operator-go-system
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system
+# Output: production
+
+# Check if ConfigMap exists in either namespace
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+kubectl get configmap app-config -n production
+```
+
+**Where to create the ConfigMap**:
+- **Bundle namespace** (operator namespace): For admin-controlled values that should override app-team settings
+- **Target namespace** (application namespace): For app-team-controlled values
+
+Bundle namespace takes precedence if the ConfigMap exists in both locations.
+
+```bash
+# Create in target namespace (app-team controlled)
+kubectl create configmap app-config --from-literal=key=value -n production
+
+# OR create in bundle namespace (admin override)
+kubectl create configmap app-config --from-literal=key=value -n k8s-werf-operator-go-system
+```
+
+**Scenario 3: Required vs optional sources**
+
+By default, all valuesFrom sources are required. If a required source is missing, the bundle fails.
+
+```bash
+# Check if source is marked optional
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system | grep -A 3 valuesFrom
+```
+
+To mark a source as optional (skipped if missing):
+
+```yaml
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: base-config        # Required - fails if missing
+      - configMapRef:
+          name: env-overrides
+        optional: true             # Optional - skipped if missing
+```
+
+Apply the change:
+
+```bash
+kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
+  '{"spec":{"converge":{"valuesFrom":[{"configMapRef":{"name":"env-overrides"},"optional":true}]}}}'
+```
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for valuesFrom examples and patterns.
+
+### Issue: Values from ConfigMaps/Secrets not being applied to deployment
+
+**Diagnosis**: Deployment succeeds, but configuration values are incorrect or missing.
+
+```bash
+# Check if Job succeeded
+kubectl get job -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app
+
+# Check WerfBundle status
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# phase: Synced (deployment succeeded)
+# But deployed app has wrong configuration
+```
+
+**Root Cause**: Values are being resolved, but not applied correctly or overridden unexpectedly.
+
+**Scenarios and Solutions**:
+
+**Scenario 1: YAML parsing errors in ConfigMap/Secret**
+
+ConfigMap contains invalid YAML that can't be parsed.
+
+```bash
+# Check Job pod logs for parsing errors
+kubectl logs job/<job-name> -n k8s-werf-operator-go-system | grep -i "yaml\|parse\|unmarshal"
+# Look for errors like: "yaml: line X: mapping values are not allowed"
+
+# Verify ConfigMap contains valid YAML
+kubectl get configmap app-config -n k8s-werf-operator-go-system -o yaml
+```
+
+Test YAML locally:
+
+```bash
+# Extract and validate YAML
+kubectl get configmap app-config -n k8s-werf-operator-go-system -o jsonpath='{.data}' | yq .
+
+# Or test with Python
+kubectl get configmap app-config -n k8s-werf-operator-go-system -o jsonpath='{.data.config\.yaml}' | python3 -c "import yaml, sys; yaml.safe_load(sys.stdin)"
+```
+
+Fix the YAML in your ConfigMap:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: k8s-werf-operator-go-system
+data:
+  config.yaml: |
+    app:
+      replicas: 3
+      image: "myapp:latest"  # Properly quoted
+```
+
+**Scenario 2: Values merge precedence confusion**
+
+Later sources should override earlier ones, but don't seem to.
+
+Values are merged in order - later sources override earlier ones for the same keys:
+
+```yaml
+valuesFrom:
+  - configMapRef:
+      name: base-config      # Applied first
+  - configMapRef:
+      name: prod-overrides   # Applied second - overrides base-config
+```
+
+```bash
+# View the order of valuesFrom sources
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system | grep -A 10 valuesFrom
+
+# Check Job args to see actual --set flags applied
+kubectl get job <job-name> -n k8s-werf-operator-go-system -o yaml | grep -A 30 "args:"
+# Each --set flag represents a resolved value
+```
+
+Check your ConfigMaps to verify which source provides which values:
+
+```bash
+# View first source
+kubectl get configmap base-config -o yaml -n k8s-werf-operator-go-system
+
+# View second source (should override)
+kubectl get configmap prod-overrides -o yaml -n k8s-werf-operator-go-system
+```
+
+If precedence isn't working as expected, verify the key paths are identical (exact match required for override).
+
+**Scenario 3: Values from wrong namespace (cross-namespace precedence)**
+
+For cross-namespace deployments, the operator checks namespaces in this order:
+1. **Bundle namespace first** (operator namespace, admin-controlled) - takes precedence
+2. **Target namespace second** (application namespace)
+
+If both namespaces have a ConfigMap with the same name, bundle namespace wins.
+
+```bash
+# Check which namespace's ConfigMap is being used
+kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system
+# Output: k8s-werf-operator-go-system (bundle namespace)
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system
+# Output: production (target namespace)
+
+# Check if ConfigMap exists in both namespaces
+kubectl get configmap app-config -n k8s-werf-operator-go-system
+kubectl get configmap app-config -n production
+```
+
+If bundle namespace ConfigMap exists, it's used regardless of target namespace ConfigMap.
+
+To use target namespace values, either:
+- Delete ConfigMap from bundle namespace, OR
+- Rename ConfigMap in bundle namespace to avoid conflict
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for namespace precedence patterns.
+
+**Scenario 4: Values don't match werf bundle schema**
+
+Deployment succeeds but configuration is wrong because values don't match the bundle's expected schema.
+
+```bash
+# Check the werf bundle's werf.yaml for expected values
+# (This requires inspecting the bundle image or documentation)
+
+# View what values are being passed
+kubectl get job <job-name> -n k8s-werf-operator-go-system -o yaml | grep -A 30 "args:" | grep "set"
+```
+
+Example mismatch:
+
+```yaml
+# ConfigMap provides (wrong key path)
+data:
+  config.yaml: |
+    replicas: 3
+
+# But werf bundle expects (correct key path)
+# app.replicas: 3
+```
+
+Fix by aligning ConfigMap structure with bundle schema:
+
+```yaml
+data:
+  config.yaml: |
+    app:
+      replicas: 3
+```
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for valuesFrom structure examples.
+
+### Issue: Values validation errors
+
+**Diagnosis**: Bundle fails with validation error in valuesFrom configuration.
+
+```bash
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# lastErrorMessage: "source 0: ConfigMapRef name is empty"
+# OR: "source 1: neither ConfigMapRef nor SecretRef is set"
+# phase: Failed
+```
+
+**Root Cause**: The `spec.converge.valuesFrom` configuration is malformed.
+
+**Error 1: Empty ConfigMapRef or SecretRef name**
+
+Error message: `"source X: ConfigMapRef name is empty"` or `"source X: SecretRef name is empty"`
+
+The valuesFrom entry specifies configMapRef or secretRef but the name field is empty.
+
+```yaml
+# INCORRECT - empty name
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: ""           # Empty string not allowed
+
+# CORRECT
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: app-config   # Must provide name
+```
+
+Fix by providing a valid name:
+
+```bash
+kubectl edit werfbundle my-app -n k8s-werf-operator-go-system
+# Update the valuesFrom entry to include a name
+```
+
+**Error 2: Neither ConfigMapRef nor SecretRef set**
+
+Error message: `"source X: neither ConfigMapRef nor SecretRef is set"`
+
+The valuesFrom entry exists but both configMapRef and secretRef are empty.
+
+```yaml
+# INCORRECT - empty entry
+spec:
+  converge:
+    valuesFrom:
+      - {}                   # Empty entry not allowed
+      - optional: true       # optional without source not allowed
+
+# CORRECT - specify one source
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: app-config
+      - secretRef:
+          name: app-secrets
+```
+
+Fix by either removing the empty entry or adding a source:
+
+```bash
+# View current configuration
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system | grep -A 10 valuesFrom
+
+# Option 1: Remove the empty entry
+kubectl edit werfbundle my-app -n k8s-werf-operator-go-system
+
+# Option 2: Add a ConfigMapRef or SecretRef
+kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
+  '{"spec":{"converge":{"valuesFrom":[{"configMapRef":{"name":"app-config"}}]}}}'
+```
+
+**Error 3: Values resolver not configured**
+
+Error message: `"values resolver required when valuesFrom is configured"`
+
+This is an internal configuration error that shouldn't happen during normal operation. If you see this error:
+
+1. Check operator logs for more context:
+   ```bash
+   kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager --tail=50
+   ```
+
+2. This may indicate a bug in the operator. File an issue with:
+   - WerfBundle YAML (`kubectl get werfbundle my-app -o yaml`)
+   - Operator version
+   - Operator logs showing the error
+
+**Prevention**
+
+Validate your WerfBundle configuration before applying:
+
+```bash
+# Check valuesFrom syntax
+kubectl apply --dry-run=client -f werfbundle.yaml
+
+# Verify each entry has either configMapRef or secretRef with a name
+kubectl get werfbundle my-app -o yaml | yq '.spec.converge.valuesFrom[] | has("configMapRef") or has("secretRef")'
+```
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for correct valuesFrom syntax and examples.
+
 ## Understanding Status Fields
 
 These fields in `kubectl describe werfbundle` help diagnose issues:
@@ -437,6 +952,150 @@ kubectl logs <pod-name> -n k8s-werf-operator-go-system -c werf --previous
 # Check resource usage at time of failure
 kubectl describe pod <pod-name> -n k8s-werf-operator-go-system | grep -A 20 "Containers"
 ```
+
+### Debugging values and multi-namespace deployments
+
+Systematic workflow for diagnosing issues with Slice 3 features (valuesFrom and targetNamespace).
+
+**Step 1: Verify WerfBundle configuration**
+
+Check if values and multi-namespace features are configured correctly:
+
+```bash
+# Get full WerfBundle spec
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system
+
+# Check specific fields
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system
+# Output: production (if cross-namespace) or empty (same namespace)
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.serviceAccountName}' -n k8s-werf-operator-go-system
+# Output: werf-converge (required for cross-namespace)
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.valuesFrom[*].configMapRef.name}' -n k8s-werf-operator-go-system
+# Output: List of ConfigMap names
+
+kubectl get werfbundle my-app -o jsonpath='{.spec.converge.valuesFrom[*].secretRef.name}' -n k8s-werf-operator-go-system
+# Output: List of Secret names
+```
+
+Verify:
+- Is `targetNamespace` set for cross-namespace deployment?
+- Is `serviceAccountName` set (required when targetNamespace differs from bundle namespace)?
+- Are `valuesFrom` sources listed?
+- Are any sources marked `optional: true`?
+
+**Step 2: Check if values sources exist**
+
+For each ConfigMap/Secret in valuesFrom, check if it exists:
+
+```bash
+# Get bundle and target namespaces
+BUNDLE_NS=$(kubectl get werfbundle my-app -o jsonpath='{.metadata.namespace}' -n k8s-werf-operator-go-system)
+TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system)
+
+# If TARGET_NS is empty, it's same-namespace deployment
+if [ -z "$TARGET_NS" ]; then
+  TARGET_NS=$BUNDLE_NS
+fi
+
+# Check each ConfigMap
+kubectl get configmap <name> -n $BUNDLE_NS
+kubectl get configmap <name> -n $TARGET_NS  # If cross-namespace
+
+# Check each Secret
+kubectl get secret <name> -n $BUNDLE_NS
+kubectl get secret <name> -n $TARGET_NS  # If cross-namespace
+```
+
+Remember namespace precedence for cross-namespace:
+1. Bundle namespace checked first (admin-controlled)
+2. Target namespace checked second (app-controlled)
+
+**Step 3: Verify operator can read values sources**
+
+Check that operator has permissions to read ConfigMaps and Secrets:
+
+```bash
+# Check operator ClusterRole
+kubectl get clusterrole werf-operator -o yaml | grep -A 5 "configmaps\|secrets"
+
+# Expected output:
+# - apiGroups: [""]
+#   resources: ["configmaps", "secrets"]
+#   verbs: ["get", "list"]
+```
+
+If permissions are missing, check [job-rbac.md](job-rbac.md) for operator RBAC setup.
+
+**Step 4: Check Job creation and status**
+
+Verify that Jobs are being created and check their status:
+
+```bash
+# Find recent Jobs for this bundle
+kubectl get jobs -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app --sort-by=.metadata.creationTimestamp
+
+# Get most recent Job name
+JOB_NAME=$(kubectl get jobs -n k8s-werf-operator-go-system -l app.kubernetes.io/instance=my-app --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+
+# Check Job status
+kubectl describe job $JOB_NAME -n k8s-werf-operator-go-system
+
+# Get Job pod name
+POD_NAME=$(kubectl get pods -n k8s-werf-operator-go-system -l job-name=$JOB_NAME -o jsonpath='{.items[0].metadata.name}')
+
+# Check pod logs for values being applied
+kubectl logs $POD_NAME -n k8s-werf-operator-go-system | grep -E "set|values"
+# Look for --set flags showing resolved values
+
+# View Job command and args to see --set flags
+kubectl get job $JOB_NAME -o yaml -n k8s-werf-operator-go-system | grep -A 30 "args:"
+```
+
+**Step 5: Verify ServiceAccount for cross-namespace deployments**
+
+If using `targetNamespace`, verify the ServiceAccount exists and has permissions:
+
+```bash
+# Get ServiceAccount name from bundle
+SA_NAME=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.serviceAccountName}' -n k8s-werf-operator-go-system)
+TARGET_NS=$(kubectl get werfbundle my-app -o jsonpath='{.spec.converge.targetNamespace}' -n k8s-werf-operator-go-system)
+
+# Check if ServiceAccount exists in target namespace
+kubectl get serviceaccount $SA_NAME -n $TARGET_NS
+
+# Verify ServiceAccount has required permissions
+kubectl auth can-i create deployments --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create services --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+kubectl auth can-i create configmaps --as=system:serviceaccount:$TARGET_NS:$SA_NAME -n $TARGET_NS
+# Expected: yes for all
+```
+
+If permissions are missing, see [job-rbac.md](job-rbac.md) for complete RBAC setup guide.
+
+**Step 6: Check WerfBundle status for specific errors**
+
+```bash
+# Check status fields
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+
+# Look for these indicators:
+# - phase: Failed (indicates permanent failure)
+# - lastErrorMessage: Contains specific error
+# - lastJobStatus: Failed (Job failed)
+# - lastJobLogs: May contain truncated logs (check pod logs for full output)
+```
+
+Common error patterns:
+- `"ServiceAccount 'X' not found"` → See Step 5 above
+- `"failed to get ConfigMap 'X'"` → See Step 2 above
+- `"source X: ConfigMapRef name is empty"` → Fix valuesFrom configuration
+- `"configMap 'X' not found in namespaces 'Y' or 'Z'"` → Create ConfigMap in appropriate namespace
+
+**Related documentation**:
+- [job-rbac.md](job-rbac.md) - Complete RBAC setup guide for cross-namespace deployments
+- [configuration.md](configuration.md) - valuesFrom examples, namespace precedence, and patterns
 
 ## Getting Help
 

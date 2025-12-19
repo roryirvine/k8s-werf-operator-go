@@ -1,0 +1,113 @@
+# Multiple Sources with Precedence Example
+#
+# This example demonstrates how multiple ConfigMaps are merged when specified
+# in the valuesFrom array, with later sources overriding earlier ones.
+#
+# What this example shows:
+# - How to use multiple ConfigMaps for base config + environment overrides
+# - Precedence rules: later sources in the array override earlier ones
+# - A common pattern: shared defaults + environment-specific customization
+#
+# In this example:
+# - base-config provides defaults (replicas: 2, logLevel: info)
+# - production-overrides changes specific values (replicas: 5, logLevel: warn)
+# - Final result: replicas=5, logLevel=warn, other values from base-config
+#
+# To apply this example:
+# 1. Update the registry URL to point to your actual bundle
+# 2. Ensure the 'production' namespace exists
+# 3. Create a ServiceAccount with appropriate RBAC (see docs/job-rbac.md)
+# 4. Apply: kubectl apply -f values-precedence.yaml
+
+---
+# Base configuration - shared defaults used across all environments
+# This ConfigMap contains conservative defaults suitable for any environment
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: base-config
+  namespace: k8s-werf-operator-go-system
+data:
+  values.yaml: |
+    app:
+      name: backend-api
+      replicas: 2
+      environment: development
+      logLevel: info
+      enableMetrics: true
+      cache:
+        size: 100MB
+        ttl: 3600
+
+---
+# Production overrides - environment-specific customization
+# This ConfigMap overrides specific values for production deployment
+# Keys that appear in both ConfigMaps: later one wins (this one)
+# Keys that only appear here: added to the final values
+# Keys only in base-config: kept as-is
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: production-overrides
+  namespace: k8s-werf-operator-go-system
+data:
+  values.yaml: |
+    app:
+      replicas: 5          # Override: production needs more replicas
+      environment: production  # Override: set correct environment
+      logLevel: warn       # Override: less verbose logging in production
+      cache:
+        size: 1GB          # Override: larger cache for production load
+        # Note: cache.ttl is not specified here, so base-config value (3600) is used
+
+    # New values only in production
+    monitoring:
+      alerting: true
+      retention: 30d
+
+---
+# WerfBundle showing multiple sources with precedence
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: backend-api
+  namespace: k8s-werf-operator-go-system
+spec:
+  registry:
+    url: ghcr.io/org/backend-api-bundle
+    pollInterval: 15m
+
+  converge:
+    targetNamespace: production
+    serviceAccountName: werf-converge
+    resourceLimits:
+      cpu: "2"
+      memory: "2Gi"
+
+    # Multiple sources are merged in array order
+    # IMPORTANT: Array order matters - later sources override earlier ones
+    valuesFrom:
+      # First source: base configuration (applied first)
+      - configMapRef:
+          name: base-config
+
+      # Second source: production overrides (applied second, overrides base)
+      - configMapRef:
+          name: production-overrides
+
+    # The final merged values will be:
+    # app.name: backend-api (from base)
+    # app.replicas: 5 (overridden by production)
+    # app.environment: production (overridden by production)
+    # app.logLevel: warn (overridden by production)
+    # app.enableMetrics: true (from base, not overridden)
+    # app.cache.size: 1GB (overridden by production)
+    # app.cache.ttl: 3600 (from base, not overridden)
+    # monitoring.alerting: true (only in production)
+    # monitoring.retention: 30d (only in production)
+    #
+    # These become --set flags:
+    # --set app.name=backend-api
+    # --set app.replicas=5
+    # --set app.environment=production
+    # ... and so on

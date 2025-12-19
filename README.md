@@ -17,14 +17,14 @@ This is early-stage software (v1alpha1 API). The operator supports bundle deploy
 - Track deployment status in the WerfBundle resource
 - Proper RBAC separation (operator minimal, job permissions namespace-scoped)
 - Capture and retain deployment job logs for troubleshooting
+- External configuration values from ConfigMaps and Secrets with merge precedence
+- Cross-namespace deployments with pre-flight ServiceAccount validation
 
 **What does NOT work yet:**
 - Semantic versioning (tags are sorted lexicographically, not by semver)
 - Advanced registry authentication (access tokens only, no username/password)
-- Cross-namespace deployments
 - Drift detection
 - Helm integration
-- Custom value overrides
 
 See [PLAN.md](docs/PLAN.md) for the full roadmap including Slice 3+.
 
@@ -126,6 +126,69 @@ See [PLAN.md](docs/PLAN.md) for the full roadmap including Slice 3+.
    kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
    kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager
    ```
+
+## Configuration Values
+
+The operator supports external configuration through Kubernetes ConfigMaps and Secrets. This allows you to provide environment-specific values without rebuilding bundles, enabling the same bundle to be deployed across development, staging, and production with different configurations.
+
+**Key features:**
+- Multiple sources can be specified and are merged in order (later sources override earlier ones)
+- Sources can be marked as optional (deployment continues if missing)
+- ConfigMaps and Secrets must contain a `values.yaml` key with YAML content
+- Values are flattened to dot notation and passed as `--set` flags to werf converge
+
+**Example:**
+
+```yaml
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: my-app
+  namespace: k8s-werf-operator-go-system
+spec:
+  registry:
+    url: ghcr.io/org/my-app-bundle
+  converge:
+    serviceAccountName: werf-converge
+    valuesFrom:
+      - configMapRef:
+          name: app-config
+      - secretRef:
+          name: app-secrets
+        optional: true
+```
+
+For detailed examples, merge behavior, and troubleshooting, see the [Configuration Reference](docs/configuration.md).
+
+## Multi-namespace Deployment
+
+The operator can deploy applications to namespaces different from where the WerfBundle resource lives. This enables security isolation between the operator and deployed applications, allowing you to manage bundles centrally while deploying to multiple target namespaces.
+
+**Requirements:**
+- ServiceAccount must exist in the target namespace before creating the WerfBundle
+- Without `targetNamespace`, deployment happens in the bundle's namespace (backward compatible)
+- Pre-flight validation ensures the ServiceAccount exists before creating Jobs
+
+**Example:**
+
+```yaml
+apiVersion: werf.io/v1alpha1
+kind: WerfBundle
+metadata:
+  name: my-app
+  namespace: k8s-werf-operator-go-system
+spec:
+  registry:
+    url: ghcr.io/org/my-app-bundle
+  converge:
+    targetNamespace: production
+    serviceAccountName: werf-deploy
+    resourceLimits:
+      cpu: "2"
+      memory: "2Gi"
+```
+
+For complete RBAC setup instructions and ServiceAccount configuration, see the [RBAC Setup Guide](docs/job-rbac.md).
 
 ## Reliability Features
 
@@ -281,7 +344,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 Current roadmap:
 
 - **Slice 2:** ✓ Enhanced registry integration with ETag caching, exponential backoff, and configurable resource management (complete)
-- **Slice 3:** Values management and cross-namespace deployments
+- **Slice 3:** ✓ Values management and cross-namespace deployments (complete)
 - **Slice 4:** Drift detection and automatic correction
 - **Slice 5:** Advanced features including semantic versioning and username/password auth
 

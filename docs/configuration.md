@@ -355,6 +355,16 @@ Each key (`values.yaml` in this case) is parsed as YAML and flattened to:
 - `database.host=postgres`
 - `database.port=5432`
 
+### Complete Working Examples
+
+For complete, copy-paste ready examples demonstrating common values patterns, see the [examples directory](../examples/). The examples cover:
+- Basic ConfigMap usage
+- Multiple sources with precedence
+- Mixing ConfigMaps and Secrets
+- Optional sources for environment-specific config
+
+Each example includes comprehensive comments and can be applied directly to a test cluster.
+
 ## Reliability Behavior
 
 ### ETag Caching

@@ -600,6 +600,116 @@ data:
 
 See [Configuration Reference](configuration.md#valuesFrom-Optional) for valuesFrom structure examples.
 
+### Issue: Values validation errors
+
+**Diagnosis**: Bundle fails with validation error in valuesFrom configuration.
+
+```bash
+kubectl describe werfbundle my-app -n k8s-werf-operator-go-system
+# lastErrorMessage: "source 0: ConfigMapRef name is empty"
+# OR: "source 1: neither ConfigMapRef nor SecretRef is set"
+# phase: Failed
+```
+
+**Root Cause**: The `spec.converge.valuesFrom` configuration is malformed.
+
+**Error 1: Empty ConfigMapRef or SecretRef name**
+
+Error message: `"source X: ConfigMapRef name is empty"` or `"source X: SecretRef name is empty"`
+
+The valuesFrom entry specifies configMapRef or secretRef but the name field is empty.
+
+```yaml
+# INCORRECT - empty name
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: ""           # Empty string not allowed
+
+# CORRECT
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: app-config   # Must provide name
+```
+
+Fix by providing a valid name:
+
+```bash
+kubectl edit werfbundle my-app -n k8s-werf-operator-go-system
+# Update the valuesFrom entry to include a name
+```
+
+**Error 2: Neither ConfigMapRef nor SecretRef set**
+
+Error message: `"source X: neither ConfigMapRef nor SecretRef is set"`
+
+The valuesFrom entry exists but both configMapRef and secretRef are empty.
+
+```yaml
+# INCORRECT - empty entry
+spec:
+  converge:
+    valuesFrom:
+      - {}                   # Empty entry not allowed
+      - optional: true       # optional without source not allowed
+
+# CORRECT - specify one source
+spec:
+  converge:
+    valuesFrom:
+      - configMapRef:
+          name: app-config
+      - secretRef:
+          name: app-secrets
+```
+
+Fix by either removing the empty entry or adding a source:
+
+```bash
+# View current configuration
+kubectl get werfbundle my-app -o yaml -n k8s-werf-operator-go-system | grep -A 10 valuesFrom
+
+# Option 1: Remove the empty entry
+kubectl edit werfbundle my-app -n k8s-werf-operator-go-system
+
+# Option 2: Add a ConfigMapRef or SecretRef
+kubectl patch werfbundle my-app -n k8s-werf-operator-go-system --type merge -p \
+  '{"spec":{"converge":{"valuesFrom":[{"configMapRef":{"name":"app-config"}}]}}}'
+```
+
+**Error 3: Values resolver not configured**
+
+Error message: `"values resolver required when valuesFrom is configured"`
+
+This is an internal configuration error that shouldn't happen during normal operation. If you see this error:
+
+1. Check operator logs for more context:
+   ```bash
+   kubectl logs -n k8s-werf-operator-go-system -l control-plane=controller-manager --tail=50
+   ```
+
+2. This may indicate a bug in the operator. File an issue with:
+   - WerfBundle YAML (`kubectl get werfbundle my-app -o yaml`)
+   - Operator version
+   - Operator logs showing the error
+
+**Prevention**
+
+Validate your WerfBundle configuration before applying:
+
+```bash
+# Check valuesFrom syntax
+kubectl apply --dry-run=client -f werfbundle.yaml
+
+# Verify each entry has either configMapRef or secretRef with a name
+kubectl get werfbundle my-app -o yaml | yq '.spec.converge.valuesFrom[] | has("configMapRef") or has("secretRef")'
+```
+
+See [Configuration Reference](configuration.md#valuesFrom-Optional) for correct valuesFrom syntax and examples.
+
 ## Understanding Status Fields
 
 These fields in `kubectl describe werfbundle` help diagnose issues:
